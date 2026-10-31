@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
@@ -11,10 +12,20 @@ except ImportError:
     streamlit_geolocation = None
 
 st.set_page_config(
-    page_title="Comparador de Preços de Supermercado", page_icon="🛒", layout="wide"
+    page_title="Lista de Compras",
+    page_icon="🛒",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
+st.markdown(
+    "<style>.block-container{padding-top:1.5rem;padding-bottom:3rem}</style>",
+    unsafe_allow_html=True,
 )
 
-PRODUTOS_INICIAIS = ["Arroz 5kg", "Feijão 1kg", "Leite 1L", "Óleo de Soja 900ml"]
+
+def brl(valor):
+    texto = f"{valor:,.2f}"
+    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -37,227 +48,296 @@ def mercados_da_regiao(lojas):
     return sorted(mercados.values(), key=lambda m: m["loja"]["distancia_km"])
 
 
-st.title("🛒 Comparador Inteligente de Compras")
-st.write(
-    "Encontre os supermercados da sua região, monte a lista e acompanhe o "
-    "custo no mercado escolhido."
-)
+# --- LISTA (guardada na URL para sobreviver a recarregamentos no celular) ---
+def registrar_item(produto, quantidade=1, comprado=False, preco_manual=0.0):
+    novo_id = f"i{st.session_state['proximo_id']}"
+    st.session_state["proximo_id"] += 1
+    st.session_state["lista"].append({"id": novo_id, "produto": produto})
+    st.session_state[f"c_{novo_id}"] = comprado
+    st.session_state[f"q_{novo_id}"] = quantidade
+    st.session_state[f"v_{novo_id}"] = preco_manual
+
+
+def carregar_lista_da_url():
+    try:
+        bruto = json.loads(st.query_params.get("lista", "[]"))
+    except ValueError:
+        return
+    if not isinstance(bruto, list):
+        return
+    for dado in bruto[:100]:
+        if not isinstance(dado, dict) or not str(dado.get("p", "")).strip():
+            continue
+        try:
+            quantidade = max(1, int(dado.get("q", 1)))
+            preco_manual = max(0.0, float(dado.get("v", 0)))
+        except (TypeError, ValueError):
+            continue
+        registrar_item(
+            str(dado["p"]).strip()[:80], quantidade, bool(dado.get("c")), preco_manual
+        )
+
+
+if "lista" not in st.session_state:
+    st.session_state["lista"] = []
+    st.session_state["proximo_id"] = 0
+    carregar_lista_da_url()
+
+
+def adicionar_item():
+    nome = st.session_state.get("novo_produto", "").strip()[:80]
+    lista = st.session_state["lista"]
+    if not nome:
+        st.session_state["aviso"] = "Digite o nome do produto."
+    elif any(i["produto"].casefold() == nome.casefold() for i in lista):
+        st.session_state["aviso"] = "Esse produto já está na lista."
+    else:
+        registrar_item(nome)
+
+
+def remover_item(item_id):
+    st.session_state["lista"] = [
+        i for i in st.session_state["lista"] if i["id"] != item_id
+    ]
+
+
+def remover_comprados():
+    st.session_state["lista"] = [
+        i
+        for i in st.session_state["lista"]
+        if not st.session_state.get(f"c_{i['id']}", False)
+    ]
+
+
+def itens_com_estado():
+    return [
+        {
+            **item,
+            "comprado": st.session_state.get(f"c_{item['id']}", False),
+            "quantidade": st.session_state.get(f"q_{item['id']}", 1),
+            "preco_manual": st.session_state.get(f"v_{item['id']}", 0.0),
+        }
+        for item in st.session_state["lista"]
+    ]
+
+
+st.title("🛒 Lista de Compras")
 
 # --- LOCALIZAÇÃO ---
-st.sidebar.header("1. Localização")
-origem = st.sidebar.radio(
-    "Como localizar os supermercados?",
-    ["Informar cidade", "Usar localização do aparelho"],
-)
-raio_km = st.sidebar.slider("Raio de busca (km)", 2, 30, 10)
-
 coordenadas = None
 local_descricao = ""
-try:
-    if origem == "Usar localização do aparelho":
-        if streamlit_geolocation is None:
-            st.sidebar.warning(
-                "Instale o pacote `streamlit-geolocation` (pip install -r "
-                "requirements.txt) para usar a localização do aparelho."
-            )
-        else:
-            with st.sidebar:
-                posicao = streamlit_geolocation()
-            if posicao and posicao.get("latitude") is not None:
-                coordenadas = (posicao["latitude"], posicao["longitude"])
-                local_descricao = "sua localização atual"
-            else:
-                st.sidebar.info(
-                    "Clique no ícone acima e permita o acesso à localização no navegador."
+with st.expander("📍 Onde você está?", expanded="coordenadas" not in st.session_state):
+    origem = st.radio(
+        "Localizar supermercados por",
+        ["Cidade", "Localização do aparelho"],
+        horizontal=True,
+    )
+    raio_km = st.slider("Raio de busca (km)", 2, 30, 10)
+    try:
+        if origem == "Localização do aparelho":
+            if streamlit_geolocation is None:
+                st.warning(
+                    "Instale `streamlit-geolocation` (pip install -r requirements.txt)."
                 )
-    else:
-        cidade_usuario = st.sidebar.text_input("Cidade", value="Bom Despacho")
-        estado_usuario = st.sidebar.text_input("Estado (sigla)", value="MG", max_chars=2)
-        if cidade_usuario.strip():
-            lat, lon, nome_local = geocodificar(cidade_usuario, estado_usuario)
-            coordenadas = (lat, lon)
-            local_descricao = nome_local
-except localizacao.ErroLocalizacao as erro:
-    st.sidebar.error(str(erro))
+            else:
+                posicao = streamlit_geolocation()
+                if posicao and posicao.get("latitude") is not None:
+                    coordenadas = (posicao["latitude"], posicao["longitude"])
+                    local_descricao = "sua localização"
+                else:
+                    st.info(
+                        "Toque no ícone acima e permita o acesso à localização. "
+                        "No celular isso exige que o app esteja em endereço https."
+                    )
+        else:
+            cidade = st.text_input("Cidade", value="Bom Despacho")
+            estado = st.text_input("Estado (sigla)", value="MG", max_chars=2)
+            if cidade.strip():
+                lat, lon, local_descricao = geocodificar(cidade, estado)
+                coordenadas = (lat, lon)
+    except localizacao.ErroLocalizacao as erro:
+        st.error(str(erro))
 
 mercados = []
 if coordenadas:
+    st.session_state["coordenadas"] = coordenadas
     try:
         with st.spinner("Buscando supermercados na região..."):
-            lojas = supermercados_proximos(*coordenadas, raio_km)
-        mercados = mercados_da_regiao(lojas)
+            mercados = mercados_da_regiao(supermercados_proximos(*coordenadas, raio_km))
     except localizacao.ErroLocalizacao as erro:
-        st.sidebar.error(str(erro))
+        st.error(str(erro))
 
-if coordenadas and not mercados:
-    st.warning(
-        "Nenhuma rede conhecida foi encontrada nesse raio. Aumente o raio de "
-        "busca ou tente outra cidade."
-    )
-    st.stop()
-if not coordenadas:
-    st.info("Informe uma cidade ou permita a localização do aparelho para começar.")
-    st.stop()
-
-st.sidebar.success(f"{len(mercados)} rede(s) encontrada(s) perto de {local_descricao}.")
-
-# --- LISTA DE COMPRAS ---
-if "lista_compras" not in st.session_state:
-    st.session_state["lista_compras"] = [
-        {"id": f"inicial-{i}", "produto": produto, "quantidade": 1, "comprado": False}
-        for i, produto in enumerate(PRODUTOS_INICIAIS)
-    ]
-    st.session_state["proximo_item_id"] = len(PRODUTOS_INICIAIS)
-    for item in st.session_state["lista_compras"]:
-        st.session_state[f"comprado_{item['id']}"] = False
-        st.session_state[f"quantidade_{item['id']}"] = 1
-
-st.subheader("📝 Sua lista de compras")
-with st.form("adicionar_item_form", clear_on_submit=True):
-    novo_produto = st.text_input("Adicionar produto", placeholder="Ex.: Café 500g")
-    adicionar_item = st.form_submit_button("Adicionar à lista")
-
-if adicionar_item:
-    nome = novo_produto.strip()
-    itens_atuais = st.session_state["lista_compras"]
-    if not nome:
-        st.warning("Digite o nome do produto que deseja adicionar.")
-    elif any(item["produto"].casefold() == nome.casefold() for item in itens_atuais):
-        st.warning("Esse produto já está na lista. Altere a quantidade no próprio item.")
-    else:
-        item_id = st.session_state["proximo_item_id"]
-        novo_id = f"personalizado-{item_id}"
-        itens_atuais.append(
-            {"id": novo_id, "produto": nome, "quantidade": 1, "comprado": False}
-        )
-        st.session_state[f"comprado_{novo_id}"] = False
-        st.session_state[f"quantidade_{novo_id}"] = 1
-        st.session_state["proximo_item_id"] = item_id + 1
-
-itens_removidos = []
-for item in st.session_state["lista_compras"]:
-    col_comprado, col_produto, col_qtd, col_remover = st.columns([0.8, 3, 1, 0.8])
-    item["comprado"] = col_comprado.checkbox("Comprado", key=f"comprado_{item['id']}")
-    col_produto.write(item["produto"])
-    item["quantidade"] = col_qtd.number_input(
-        "Qtd.", min_value=1, step=1, key=f"quantidade_{item['id']}"
-    )
-    if col_remover.button("Remover", key=f"remover_{item['id']}"):
-        itens_removidos.append(item["id"])
-
-if itens_removidos:
-    st.session_state["lista_compras"] = [
-        item
-        for item in st.session_state["lista_compras"]
-        if item["id"] not in itens_removidos
-    ]
-    st.rerun()
-
-if not st.session_state["lista_compras"]:
-    st.info("Sua lista está vazia. Adicione um produto para começar.")
-    st.stop()
-
-itens_pendentes = [i for i in st.session_state["lista_compras"] if not i["comprado"]]
-if not itens_pendentes:
-    st.success("Todos os produtos da lista foram marcados como comprados.")
-    st.stop()
-
-# --- PREÇOS (consulta automática a cada mudança na lista; resultados em cache) ---
+# --- PREÇOS ONLINE (consulta automática a cada mudança na lista; com cache) ---
+itens = itens_com_estado()
+pendentes = [i for i in itens if not i["comprado"]]
 consultaveis = [m for m in mercados if precos.tem_consulta_online(m["rede"])]
-sem_consulta = [m for m in mercados if not precos.tem_consulta_online(m["rede"])]
 
-tarefas = [(m, item) for m in consultaveis for item in itens_pendentes]
-with st.spinner("Atualizando preços..."):
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        respostas = list(
-            pool.map(
-                lambda t: precos.consultar_preco_cache(t[0]["rede"], t[1]["produto"]),
-                tarefas,
+tarefas = [(m["rede"], i) for m in consultaveis for i in itens]
+ofertas = {}
+if tarefas:
+    with st.spinner("Atualizando preços..."):
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            respostas = list(
+                pool.map(
+                    lambda t: precos.consultar_preco_cache(t[0], t[1]["produto"]), tarefas
+                )
             )
-        )
+    for (rede, item), resposta in zip(tarefas, respostas):
+        ofertas[(rede["nome"], item["id"])] = resposta
 
-resultados = {}
-for (mercado, item), (oferta, erro) in zip(tarefas, respostas):
-    rede_nome = mercado["rede"]["nome"]
-    dados = resultados.setdefault(
-        rede_nome, {"mercado": mercado, "linhas": [], "total": 0.0, "faltando": 0}
-    )
+
+def preco_do_item(nome_rede, item, usar_manual):
+    """Retorna (preço unitário ou None, origem)."""
+    if usar_manual and item["preco_manual"] > 0:
+        return item["preco_manual"], "preço da prateleira"
+    oferta, _erro = ofertas.get((nome_rede, item["id"]), (None, None))
     if oferta:
-        subtotal = oferta["preco"] * item["quantidade"]
-        dados["total"] += subtotal
-        dados["linhas"].append(
-            {
-                "Produto": item["produto"],
-                "Encontrado como": oferta["descricao"],
-                "Marca": oferta["marca"],
-                "Quantidade": item["quantidade"],
-                "Preço Unitário": f"R$ {oferta['preco']:.2f}",
-                "Subtotal": f"R$ {subtotal:.2f}",
-            }
-        )
+        return oferta["preco"], "preço online"
+    return None, ""
+
+
+comparativo = []
+for mercado in consultaveis:
+    nome = mercado["rede"]["nome"]
+    total, faltando = 0.0, 0
+    for item in pendentes:
+        preco, _ = preco_do_item(nome, item, usar_manual=False)
+        if preco is None:
+            faltando += 1
+        else:
+            total += preco * item["quantidade"]
+    comparativo.append({"mercado": mercado, "total": total, "faltando": faltando})
+comparativo.sort(key=lambda c: (c["faltando"], c["total"]))
+
+nomes_mercados = [m["rede"]["nome"] for m in mercados]
+if st.session_state.get("mercado_selecionado") not in nomes_mercados:
+    st.session_state["mercado_selecionado"] = (
+        comparativo[0]["mercado"]["rede"]["nome"]
+        if comparativo
+        else (nomes_mercados[0] if nomes_mercados else None)
+    )
+mercado_atual = st.session_state["mercado_selecionado"]
+
+aba_lista, aba_mercados = st.tabs(["🛒 Lista", "📊 Mercados"])
+
+# --- ABA LISTA ---
+with aba_lista:
+    with st.form("adicionar_item_form", clear_on_submit=True):
+        st.text_input("Adicionar produto", key="novo_produto", placeholder="Ex.: Café 500g")
+        st.form_submit_button("➕ Adicionar", on_click=adicionar_item)
+    if st.session_state.get("aviso"):
+        st.warning(st.session_state.pop("aviso"))
+
+    if mercado_atual:
+        st.caption(f"Comprando em: **{mercado_atual}**")
+    elif itens:
+        st.caption("Informe sua localização para ver os preços dos mercados.")
+
+    total_falta, total_carrinho, sem_preco = 0.0, 0.0, 0
+    for item in itens:
+        preco, _ = preco_do_item(mercado_atual, item, usar_manual=True)
+        if preco is None:
+            if not item["comprado"]:
+                sem_preco += 1
+            continue
+        subtotal = preco * item["quantidade"]
+        if item["comprado"]:
+            total_carrinho += subtotal
+        else:
+            total_falta += subtotal
+
+    if itens:
+        col_falta, col_carrinho = st.columns(2)
+        col_falta.metric("Falta comprar", brl(total_falta))
+        col_carrinho.metric("No carrinho", brl(total_carrinho))
+        if sem_preco:
+            st.caption(
+                f"{sem_preco} item(ns) sem preço — abra “Editar” e informe o valor da prateleira."
+            )
+
+    for item in itens:
+        item_id = item["id"]
+        preco, origem = preco_do_item(mercado_atual, item, usar_manual=True)
+        with st.container(border=True):
+            st.checkbox(item["produto"], key=f"c_{item_id}")
+            if preco is not None:
+                st.caption(
+                    f"{item['quantidade']} × {brl(preco)} = "
+                    f"{brl(preco * item['quantidade'])} · {origem}"
+                )
+            else:
+                st.caption("Sem preço encontrado")
+            with st.expander("Editar"):
+                st.number_input("Quantidade", min_value=1, step=1, key=f"q_{item_id}")
+                st.number_input(
+                    "Preço na prateleira (R$) — 0 usa o preço online",
+                    min_value=0.0,
+                    step=0.1,
+                    format="%.2f",
+                    key=f"v_{item_id}",
+                )
+                st.button(
+                    "🗑️ Remover da lista",
+                    key=f"remover_{item_id}",
+                    on_click=remover_item,
+                    args=(item_id,),
+                )
+
+    if any(i["comprado"] for i in itens):
+        st.button("Limpar itens comprados", on_click=remover_comprados)
+    if not itens:
+        st.info("Sua lista está vazia. Adicione um produto acima.")
+    st.caption(
+        "Os preços online podem diferir da loja física. Confira na prateleira e, "
+        "se mudar, informe o valor em “Editar”. A lista fica salva no endereço "
+        "da página: adicione-o aos favoritos para não perdê-la."
+    )
+
+# --- ABA MERCADOS ---
+with aba_mercados:
+    if not mercados:
+        st.info("Informe sua cidade ou localização em “Onde você está?”.")
     else:
-        dados["faltando"] += 1
-        dados["linhas"].append(
+        st.caption(f"Perto de {local_descricao}")
+        if not pendentes:
+            st.info("Não há itens pendentes para comparar.")
+        linhas = [
             {
-                "Produto": item["produto"],
-                "Encontrado como": "Erro na consulta" if erro else "Não encontrado",
-                "Marca": "",
-                "Quantidade": item["quantidade"],
-                "Preço Unitário": "—",
-                "Subtotal": "—",
+                "Mercado": c["mercado"]["rede"]["nome"],
+                "Distância": f"{c['mercado']['loja']['distancia_km']:.1f} km",
+                "Total": brl(c["total"]),
+                "Sem preço": c["faltando"],
             }
-        )
+            for c in comparativo
+        ] + [
+            {
+                "Mercado": m["rede"]["nome"],
+                "Distância": f"{m['loja']['distancia_km']:.1f} km",
+                "Total": "sem consulta online",
+                "Sem preço": "—",
+            }
+            for m in mercados
+            if m not in consultaveis
+        ]
+        if pendentes:
+            st.dataframe(linhas, hide_index=True, width="stretch")
+        if not consultaveis:
+            st.warning(
+                "Nenhuma rede encontrada tem consulta online configurada. Você "
+                "ainda pode escolher o mercado e informar os preços da prateleira."
+            )
+        st.selectbox("Onde você vai comprar?", nomes_mercados, key="mercado_selecionado")
 
-st.subheader("📊 Supermercados da região")
-quadro = [
-    {
-        "Supermercado": nome,
-        "Tipo": d["mercado"]["rede"]["categoria"],
-        "Distância": f"{d['mercado']['loja']['distancia_km']:.1f} km",
-        "Custo Total": f"R$ {d['total']:.2f}",
-        "Itens sem preço": d["faltando"],
-    }
-    for nome, d in sorted(
-        resultados.items(), key=lambda par: (par[1]["faltando"], par[1]["total"])
-    )
-]
-quadro += [
-    {
-        "Supermercado": m["rede"]["nome"],
-        "Tipo": m["rede"]["categoria"],
-        "Distância": f"{m['loja']['distancia_km']:.1f} km",
-        "Custo Total": "Sem consulta online",
-        "Itens sem preço": "—",
-    }
-    for m in sem_consulta
-]
-st.dataframe(quadro, hide_index=True)
-
-if not resultados:
-    st.warning(
-        "Nenhuma das redes encontradas tem consulta online de preços configurada "
-        "ainda. Configure o `dominio` delas em `precos.py`."
-    )
-    st.stop()
-
-# --- MERCADO ESCOLHIDO ---
-st.subheader("🛒 Onde você vai comprar?")
-opcoes = list(resultados)
-if st.session_state.get("mercado_selecionado") not in opcoes:
-    st.session_state["mercado_selecionado"] = opcoes[0]
-escolhido = st.selectbox(
-    "Selecione o mercado para acompanhar sua compra", opcoes, key="mercado_selecionado"
-)
-dados = resultados[escolhido]
-st.success(f"Total atualizado no **{escolhido}**: R$ {dados['total']:.2f}")
-if dados["faltando"]:
-    st.warning(
-        f"{dados['faltando']} item(ns) sem preço encontrado nesse mercado; "
-        "não entram no total. Tente um nome de produto mais simples."
-    )
-st.dataframe(dados["linhas"], hide_index=True)
-st.caption(
-    "Preços consultados na loja virtual da rede e mantidos por 30 minutos. Podem "
-    "diferir dos valores da loja física da sua cidade; confirme antes de comprar. "
-    "Itens novos são consultados automaticamente."
+st.query_params["lista"] = json.dumps(
+    [
+        {
+            "p": i["produto"],
+            "q": i["quantidade"],
+            "c": i["comprado"],
+            "v": i["preco_manual"],
+        }
+        for i in itens
+    ],
+    ensure_ascii=False,
+    separators=(",", ":"),
 )
