@@ -43,4 +43,26 @@ assert.equal(ofertas[0].preco, 19);
 const d = distanciaKm(-19.7375, -45.2517, -19.7375, -45.2517 + 0.1);
 assert.ok(d > 10 && d < 11.5, d);
 
+import { gerarLista } from "./js/gerador.js";
+
+const nomes = (l) => l.map((i) => i.produto);
+const fam = { adultos: 2, criancas: [1, 8], restricoes: [] };
+let g = gerarLista(fam, 30);
+assert.deepEqual([...new Set(g.map((i) => i.categoria))], ["alimentacao", "limpeza", "opcional"]);
+assert.ok(nomes(g).includes("Fralda descartável (pacote)"));
+assert.ok(g.every((i) => i.quantidade >= 1 && i.estimativa > 0));
+assert.ok(gerarLista(fam, 7).find((i) => i.produto === "Arroz 5kg").quantidade <= g.find((i) => i.produto === "Arroz 5kg").quantidade);
+assert.ok(g.find((i) => i.produto === "Leite 1L").quantidade > gerarLista({ adultos: 1, criancas: [], restricoes: [] }, 30).find((i) => i.produto === "Leite 1L").quantidade);
+
+g = nomes(gerarLista({ adultos: 1, criancas: [], restricoes: ["lactose", "gluten", "diabetes", "vegetariano", "ovo"] }, 30));
+for (const proibido of ["Leite 1L", "Queijo mussarela 500g", "Iogurte", "Macarrão 500g", "Pão de forma", "Farinha de trigo 1kg", "Açúcar 1kg", "Refrigerante 2L", "Ovos (dúzia)", "Frango 1kg", "Carne bovina 1kg"]) assert.ok(!g.includes(proibido), proibido);
+for (const esperado of ["Leite sem lactose 1L", "Macarrão de arroz 500g", "Adoçante 100ml", "Lentilha 500g"]) assert.ok(g.includes(esperado), esperado);
+
+// lista gerada cabe no orçamento, cortando primeiro os opcionais
+const base = gerarLista(fam, 30).map((i, n) => ({ id: `i${n}`, produto: i.produto, prioridade: i.prioridade, quantidade: i.quantidade, preco: i.estimativa, comprado: false }));
+const custo = base.reduce((s, i) => s + i.preco * i.quantidade, 0);
+const plano = ajustarAoOrcamento(base, custo * 0.8);
+assert.ok(plano.cabe && plano.total <= custo * 0.8);
+assert.ok(plano.mudancas.every((m) => base.find((i) => i.id === m.id).prioridade !== "Essencial") || plano.mudancas.some((m) => base.find((i) => i.id === m.id).prioridade === "Opcional"));
+
 console.log("todos os testes passaram");

@@ -6,9 +6,11 @@ Lista de compras para usar **dentro do supermercado**, no celular. Cadastro, or�
 
 HTML + CSS + JavaScript puro (PWA), sem instalar nada. Funciona offline depois do primeiro acesso e pode ser adicionada à tela inicial do celular.
 
-- Cadastro (nome, cidade, estado, orçamento); dados guardados só no aparelho (localStorage).
-- Lista editável: marcar comprado, adicionar, alterar quantidade, prioridade (Essencial/Normal/Opcional), adiar e preço da prateleira.
-- Orçamento: se a lista passar do valor, sugere reduzir/adiar itens (opcionais primeiro) e aplica com confirmação.
+- Conta local: nome, PIN opcional, cidade, estado, adultos, idades das crianças e restrições alimentares (sem lactose, sem glúten, vegetariano, diabetes, alergia a ovo). Dados guardados só no aparelho (localStorage); contas antigas são migradas.
+- Nova compra: após entrar, você informa o valor e o período (1 semana, 15 dias ou 1 mês). A lista é gerada para a família (crianças pesam menos que adultos; fraldas para menores de 3 anos), nesta ordem: **alimentação básica → limpeza e higiene → opcionais**, respeitando as restrições. O que não couber no valor é reduzido/adiado, começando pelos opcionais.
+- Os preços iniciais são **estimativas de referência** (marcadas como "preço estimado") até você informar o preço da prateleira ou haver preço online.
+- Lista editável: marcar comprado, adicionar, alterar quantidade, prioridade, adiar e preço da prateleira.
+- Orçamento: se a lista passar do valor, sugere reduzir/adiar itens e aplica com confirmação.
 - Supermercados: busca no OpenStreetMap pela cidade ou pela localização do aparelho.
 
 ### Testar localmente

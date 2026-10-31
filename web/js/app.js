@@ -1,12 +1,17 @@
 import { PRIORIDADES, ajustarAoOrcamento } from "./orcamento.js";
 import { identificarRede, normalizar, temConsultaOnline, consultarPrecoCache } from "./redes.js";
 import { buscarSupermercados, geocodificarCidade, posicaoDoAparelho } from "./mapas.js";
+import { CATEGORIAS, RESTRICOES, gerarLista } from "./gerador.js";
 
-const CHAVE = "appmarket.v1";
+const CHAVE_ANTIGA = "appmarket.v1";
+const CHAVE_CONTAS = "appmarket.contas";
+const CHAVE_SESSAO = "appmarket.sessao";
 const CHAVE_REGIAO = "appmarket.regiao";
+const chaveUsuario = (id) => `appmarket.u.${id}`;
 const PADRAO = {
-  perfil: null,
+  perfil: null, // {nome, cidade, estado, adultos, criancas: [idades], restricoes: [], outras}
   lista: [],
+  compra: { orcamento: 0, dias: 30 },
   mercado: null,
   proxy: "",
   origem: "cidade",
@@ -14,23 +19,78 @@ const PADRAO = {
   proximoId: 1,
 };
 
-let estado = carregar();
-let tela = "lista";
+function lerJson(chave, padrao) {
+  try {
+    return JSON.parse(localStorage.getItem(chave) ?? "null") ?? padrao;
+  } catch {
+    return padrao;
+  }
+}
+
+let contas = lerContas();
+let sessao = localStorage.getItem(CHAVE_SESSAO);
+if (sessao && !contas.some((c) => c.id === sessao)) sessao = null;
+let estado = sessao ? carregarUsuario(sessao) : { ...PADRAO };
+let tela = sessao ? "compra" : contas.length ? "entrar" : "cadastro";
 let regiao = { status: "ocioso", mercados: [], descricao: "", erro: "" };
 const ofertas = new Map(); // "rede|produto" -> {oferta, erro} | {pendente: true}
 const abertos = new Set(); // itens com o painel "Editar" aberto
 let aviso = "";
+let info = "";
 
-function carregar() {
-  try {
-    return { ...PADRAO, ...JSON.parse(localStorage.getItem(CHAVE) ?? "{}") };
-  } catch {
-    return { ...PADRAO };
-  }
+function lerContas() {
+  const guardadas = lerJson(CHAVE_CONTAS, null);
+  if (guardadas) return guardadas;
+  // migra os dados da versão anterior (sem login) para uma conta local sem PIN
+  const antigo = lerJson(CHAVE_ANTIGA, null);
+  if (!antigo?.perfil) return [];
+  const { orcamento, ...resto } = antigo.perfil;
+  const id = "u1";
+  const migrado = { ...PADRAO, ...antigo, perfil: { adultos: 1, criancas: [], restricoes: [], outras: "", ...resto }, compra: { orcamento: orcamento ?? 0, dias: 30 } };
+  localStorage.setItem(chaveUsuario(id), JSON.stringify(migrado));
+  const lista = [{ id, nome: resto.nome, sal: "", hash: null }];
+  localStorage.setItem(CHAVE_CONTAS, JSON.stringify(lista));
+  localStorage.removeItem(CHAVE_ANTIGA);
+  return lista;
+}
+
+function carregarUsuario(id) {
+  const dados = lerJson(chaveUsuario(id), {});
+  return { ...PADRAO, ...dados, compra: { ...PADRAO.compra, ...dados.compra } };
 }
 
 function salvar() {
-  localStorage.setItem(CHAVE, JSON.stringify(estado));
+  if (sessao) localStorage.setItem(chaveUsuario(sessao), JSON.stringify(estado));
+}
+
+function salvarContas() {
+  localStorage.setItem(CHAVE_CONTAS, JSON.stringify(contas));
+}
+
+async function hashPin(pin, sal) {
+  const bytes = new TextEncoder().encode(`${sal}:${pin}`);
+  const resumo = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(resumo)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function entrarNaConta(id) {
+  sessao = id;
+  localStorage.setItem(CHAVE_SESSAO, id);
+  estado = carregarUsuario(id);
+  ofertas.clear();
+  regiao = { status: "ocioso", mercados: [], descricao: "", erro: "" };
+  tela = "compra";
+  aviso = "";
+  info = "";
+  carregarRegiao();
+}
+
+function sair() {
+  sessao = null;
+  localStorage.removeItem(CHAVE_SESSAO);
+  estado = { ...PADRAO };
+  ofertas.clear();
+  tela = contas.length ? "entrar" : "cadastro";
 }
 
 const brl = (valor) =>
@@ -47,6 +107,7 @@ function precoDoItem(nomeRede, item, usarManual) {
   if (usarManual && item.preco > 0) return { preco: item.preco, origem: "preço da prateleira" };
   const resposta = ofertas.get(chaveOferta(nomeRede, item.produto));
   if (resposta?.oferta) return { preco: resposta.oferta.preco, origem: "preço online" };
+  if (usarManual && item.estimativa > 0) return { preco: item.estimativa, origem: "preço estimado" };
   return { preco: null, origem: "" };
 }
 
@@ -167,33 +228,98 @@ function comparativo() {
 }
 
 // --- Telas ---
-function htmlCadastro(perfil = {}, titulo = "👋 Bem-vindo!", mostrarAvancado = false) {
+function htmlEntrar() {
   return `
-    <h1>${titulo}</h1>
-    ${perfil.nome ? "" : "<p>Faça seu cadastro para começar a montar suas compras.</p>"}
-    <form data-form="${mostrarAvancado ? "perfil" : "cadastro"}" class="cartao">
-      <label>Seu nome <input name="nome" required maxlength="40" value="${esc(perfil.nome ?? "")}"></label>
-      <label>Cidade <input name="cidade" required maxlength="60" value="${esc(perfil.cidade ?? "Bom Despacho")}"></label>
-      <label>Estado (sigla) <input name="estado" maxlength="2" value="${esc(perfil.estado ?? "MG")}"></label>
-      <label>Quanto você quer e pode gastar nesta compra? (R$) — 0 = sem limite
-        <input name="orcamento" type="number" min="0" step="0.01" inputmode="decimal" value="${perfil.orcamento ?? 0}"></label>
-      ${
-        mostrarAvancado
-          ? `<details><summary>Avançado</summary>
-              <label>URL do proxy de preços online (opcional)
-                <input name="proxy" type="url" placeholder="https://seu-worker.workers.dev" value="${esc(estado.proxy)}"></label>
-              <p class="dica">Sem proxy os preços online ficam desligados e você informa o preço da prateleira. Veja o README.</p>
-            </details>`
-          : ""
-      }
+    <h1>🛒 Lista de Compras</h1>
+    <form data-form="entrar" class="cartao">
+      <label>Conta
+        <select name="conta">${contas.map((c) => `<option value="${esc(c.id)}">${esc(c.nome)}</option>`).join("")}</select></label>
+      <label>PIN (se você definiu um)
+        <input name="pin" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8"></label>
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+      <button class="primario" type="submit">Entrar</button>
+    </form>
+    <button data-tela="cadastro">Criar nova conta</button>
+    <p class="dica">As contas ficam só neste aparelho (sem servidor). O PIN apenas impede que outra pessoa abra sua conta aqui.</p>`;
+}
+
+function camposPerfil(perfil = {}) {
+  const marcadas = new Set(perfil.restricoes ?? []);
+  return `
+    <label>Cidade <input name="cidade" required maxlength="60" value="${esc(perfil.cidade ?? "Bom Despacho")}"></label>
+    <label>Estado (sigla) <input name="estado" maxlength="2" value="${esc(perfil.estado ?? "MG")}"></label>
+    <label>Adultos (13 anos ou mais)
+      <input name="adultos" type="number" min="1" max="20" inputmode="numeric" required value="${perfil.adultos ?? 1}"></label>
+    <label>Idades das crianças (até 12 anos, separadas por vírgula; deixe vazio se não houver)
+      <input name="criancas" inputmode="text" placeholder="ex.: 2, 7" value="${esc((perfil.criancas ?? []).join(", "))}"></label>
+    <fieldset>
+      <legend>Restrições alimentares da família</legend>
+      ${Object.entries(RESTRICOES)
+        .map(([id, nome]) => `<label class="marcar"><input type="checkbox" name="restricoes" value="${id}" ${marcadas.has(id) ? "checked" : ""}><span>${esc(nome)}</span></label>`)
+        .join("")}
+    </fieldset>
+    <label>Outras restrições (só para lembrar, não altera a lista)
+      <input name="outras" maxlength="120" value="${esc(perfil.outras ?? "")}"></label>`;
+}
+
+function htmlCadastro() {
+  return `
+    <h1>👋 Criar conta</h1>
+    <p>Conte sobre sua família para o app montar a lista de compras.</p>
+    <form data-form="cadastro" class="cartao">
+      <label>Seu nome <input name="nome" required maxlength="40"></label>
+      <label>PIN de 4 a 8 números (opcional)
+        <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="new-password"></label>
+      ${camposPerfil()}
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+      <button class="primario" type="submit">Criar conta e entrar</button>
+    </form>
+    ${contas.length ? '<button data-tela="entrar">Já tenho conta</button>' : ""}
+    <p class="dica">Seus dados ficam salvos só neste aparelho.</p>`;
+}
+
+function htmlPerfil() {
+  return `
+    <h1>👤 Perfil</h1>
+    <form data-form="perfil" class="cartao">
+      <label>Seu nome <input name="nome" required maxlength="40" value="${esc(estado.perfil.nome)}"></label>
+      ${camposPerfil(estado.perfil)}
+      <details><summary>Avançado</summary>
+        <label>URL do proxy de preços online (opcional)
+          <input name="proxy" type="url" placeholder="https://seu-worker.workers.dev" value="${esc(estado.proxy)}"></label>
+        <p class="dica">Sem proxy os preços online ficam desligados e você informa o preço da prateleira. Veja o README.</p>
+      </details>
       <button class="primario" type="submit">Salvar</button>
     </form>
-    <p class="dica">Seus dados ficam salvos só neste aparelho (sem senha e sem servidor).</p>
-    ${mostrarAvancado ? '<button class="perigo" data-acao="apagar">Apagar todos os dados deste aparelho</button>' : ""}`;
+    <p class="dica">Para refazer a lista com a família atualizada, use a aba Compra.</p>
+    <button data-acao="sair">Sair da conta</button>
+    <button class="perigo" data-acao="apagar">Apagar esta conta e seus dados</button>`;
+}
+
+function htmlCompra() {
+  const { perfil, compra } = estado;
+  const criancas = perfil.criancas.length ? `${perfil.criancas.length} criança(s) (${perfil.criancas.join(", ")} anos)` : "sem crianças";
+  const restricoes = perfil.restricoes.map((r) => RESTRICOES[r]).filter(Boolean);
+  return `
+    <h1>💰 Nova compra</h1>
+    <p>Olá, ${esc(perfil.nome)}! Família: ${perfil.adultos} adulto(s), ${criancas}.
+      ${restricoes.length ? `Restrições: ${esc(restricoes.join(", "))}.` : ""}</p>
+    <form data-form="compra" class="cartao">
+      <label>Quanto você quer e pode gastar? (R$) — 0 = sem limite
+        <input name="orcamento" type="number" min="0" step="0.01" inputmode="decimal" required value="${compra.orcamento}"></label>
+      <label>Compra para quanto tempo?
+        <select name="dias">${[[7, "1 semana"], [15, "15 dias"], [30, "1 mês"]]
+          .map(([d, nome]) => `<option value="${d}" ${compra.dias === d ? "selected" : ""}>${nome}</option>`)
+          .join("")}</select></label>
+      <p class="dica">A lista é montada primeiro com alimentação básica, depois limpeza e higiene e, por fim, os opcionais — cortando o que não couber no valor. Os preços são estimativas até você informar o valor da prateleira ou o preço online.</p>
+      ${estado.lista.length ? '<p class="erro">Gerar uma nova lista substitui a lista atual.</p>' : ""}
+      <button class="primario" type="submit">Gerar lista</button>
+    </form>
+    ${estado.lista.length ? '<button data-tela="lista">Continuar lista atual</button>' : ""}`;
 }
 
 function htmlOrcamento(t) {
-  const orcamento = estado.perfil.orcamento;
+  const orcamento = estado.compra.orcamento;
   const campo = `
     <label>💰 Quanto posso gastar (R$) — 0 = sem limite
       <input type="number" min="0" step="0.01" inputmode="decimal" data-campo="orcamento" value="${orcamento}"></label>`;
@@ -289,8 +415,14 @@ function htmlLista() {
            ${t.semPreco ? `<p class="dica">${t.semPreco} item(ns) sem preço — abra “Editar” e informe o valor da prateleira.</p>` : ""}`
         : ""
     }
+    ${info ? `<p class="ok">${esc(info)}</p>` : ""}
     ${htmlOrcamento(t)}
-    ${itens.map(htmlItem).join("")}
+    ${Object.entries(CATEGORIAS)
+      .map(([cat, { titulo }]) => {
+        const doGrupo = itens.filter((i) => (CATEGORIAS[i.categoria] ? i.categoria : "extra") === cat);
+        return doGrupo.length ? `<h3>${titulo}</h3>${doGrupo.map(htmlItem).join("")}` : "";
+      })
+      .join("")}
     ${itens.some((i) => i.comprado) ? '<button data-acao="limpar">Limpar itens comprados</button>' : ""}
     ${itens.length ? "" : '<p class="dica">Sua lista está vazia. Adicione um produto acima.</p>'}
     <p class="dica">Os preços online podem diferir da loja física. Confira na prateleira e, se mudar, informe o valor em “Editar”.</p>`;
@@ -335,20 +467,24 @@ function htmlMercados() {
 function render() {
   const raiz = document.getElementById("app");
   const rolagem = window.scrollY;
-  if (!estado.perfil) {
-    raiz.innerHTML = htmlCadastro();
+  if (!sessao) {
+    raiz.innerHTML = `<div class="tela">${tela === "cadastro" || !contas.length ? htmlCadastro() : htmlEntrar()}</div>`;
+    window.scrollTo(0, rolagem);
     return;
   }
+  if (tela === "entrar" || tela === "cadastro") tela = "compra";
   const conteudo =
     tela === "mercados"
       ? htmlMercados()
       : tela === "perfil"
-        ? htmlCadastro(estado.perfil, "👤 Perfil", true)
-        : `<h1>🛒 Lista de Compras</h1>${htmlLista()}`;
+        ? htmlPerfil()
+        : tela === "compra"
+          ? htmlCompra()
+          : `<h1>🛒 Lista de Compras</h1>${htmlLista()}`;
   raiz.innerHTML = `
     <div class="tela">${conteudo}</div>
     <nav>
-      ${[["lista", "🛒", "Lista"], ["mercados", "📊", "Mercados"], ["perfil", "👤", estado.perfil.nome]]
+      ${[["lista", "🛒", "Lista"], ["mercados", "📊", "Mercados"], ["compra", "💰", "Compra"], ["perfil", "👤", estado.perfil.nome]]
         .map(([id, icone, nome]) => `<button data-tela="${id}" class="${tela === id ? "ativo" : ""}">${icone}<span>${esc(nome)}</span></button>`)
         .join("")}
     </nav>`;
@@ -372,12 +508,20 @@ function adicionarItem(nome) {
     preco: 0,
     prioridade: "Normal",
     adiado: false,
+    categoria: "extra",
+    estimativa: 0,
   });
   return "";
 }
 
-function aplicarAjuste() {
-  const plano = ajustarAoOrcamento(
+function resumoDoAjuste(plano) {
+  const adiados = plano.mudancas.filter((m) => m.para === 0).length;
+  const reduzidos = plano.mudancas.length - adiados;
+  return `Ajuste ao orçamento: ${adiados} item(ns) adiado(s) e ${reduzidos} com quantidade reduzida.`;
+}
+
+function planoDoOrcamento() {
+  return ajustarAoOrcamento(
     estado.lista.filter(itemAtivo).map((i) => ({
       id: i.id,
       produto: i.produto,
@@ -386,12 +530,38 @@ function aplicarAjuste() {
       preco: precoDoItem(estado.mercado, i, true).preco,
       comprado: i.comprado,
     })),
-    estado.perfil.orcamento,
+    estado.compra.orcamento,
   );
+}
+
+function aplicarAjuste() {
+  const plano = planoDoOrcamento();
   for (const m of plano.mudancas) {
     const item = itemPorId(m.id);
     if (m.para === 0) item.adiado = true;
     else item.quantidade = m.para;
+  }
+  return plano;
+}
+
+function criarCompra(orcamento, dias) {
+  estado.compra = { orcamento, dias };
+  estado.lista = gerarLista(estado.perfil, dias).map((base) => ({
+    id: `i${estado.proximoId++}`,
+    produto: base.produto,
+    quantidade: base.quantidade,
+    comprado: false,
+    preco: 0,
+    prioridade: base.prioridade,
+    adiado: false,
+    categoria: base.categoria,
+    estimativa: base.estimativa,
+  }));
+  info = "";
+  if (orcamento > 0) {
+    const plano = aplicarAjuste();
+    info = plano.mudancas.length ? resumoDoAjuste(plano) : "Toda a lista cabe no seu orçamento.";
+    if (!plano.cabe) info += " Mesmo assim os itens essenciais passam do valor informado.";
   }
 }
 
@@ -403,10 +573,29 @@ function numero(valor, minimo, inteiro) {
 
 const app = document.getElementById("app");
 
-app.addEventListener("submit", (e) => {
+function lerPerfil(fd) {
+  const criancas = String(fd.get("criancas") ?? "")
+    .split(/[,;\s]+/)
+    .filter(Boolean)
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n >= 0 && n <= 17)
+    .map(Math.round)
+    .slice(0, 12);
+  return {
+    cidade: String(fd.get("cidade")).trim().slice(0, 60),
+    estado: String(fd.get("estado") ?? "").trim().slice(0, 2).toUpperCase(),
+    adultos: numero(fd.get("adultos"), 1, true),
+    criancas,
+    restricoes: fd.getAll("restricoes").filter((r) => r in RESTRICOES),
+    outras: String(fd.get("outras") ?? "").trim().slice(0, 120),
+  };
+}
+
+app.addEventListener("submit", async (e) => {
   e.preventDefault();
   const form = e.target;
-  const dados = Object.fromEntries(new FormData(form));
+  const fd = new FormData(form);
+  const dados = Object.fromEntries(fd);
   const tipo = form.dataset.form;
   if (tipo === "adicionar") {
     aviso = adicionarItem(dados.produto);
@@ -414,24 +603,61 @@ app.addEventListener("submit", (e) => {
     render();
     document.querySelector('[name="produto"]')?.focus();
     atualizarPrecos();
-  } else if (tipo === "cadastro" || tipo === "perfil") {
-    const cidadeMudou = estado.perfil?.cidade !== dados.cidade.trim();
-    estado.perfil = {
-      nome: dados.nome.trim().slice(0, 40),
-      cidade: dados.cidade.trim().slice(0, 60),
-      estado: (dados.estado ?? "").trim().slice(0, 2).toUpperCase(),
-      orcamento: numero(dados.orcamento, 0, false),
-    };
-    if (tipo === "perfil") {
-      const proxyAnterior = estado.proxy;
-      estado.proxy = (dados.proxy ?? "").trim();
-      if (estado.proxy !== proxyAnterior) ofertas.clear();
+  } else if (tipo === "entrar") {
+    const conta = contas.find((c) => c.id === dados.conta);
+    if (!conta) return;
+    if (conta.hash && (await hashPin(dados.pin, conta.sal)) !== conta.hash) {
+      aviso = "PIN incorreto.";
+      render();
+      return;
     }
+    aviso = "";
+    entrarNaConta(conta.id);
+    render();
+  } else if (tipo === "cadastro") {
+    const nome = dados.nome.trim().slice(0, 40);
+    const pin = (dados.pin ?? "").trim();
+    if (pin && !/^\d{4,8}$/.test(pin)) {
+      aviso = "O PIN deve ter de 4 a 8 números.";
+      render();
+      return;
+    }
+    const sal = crypto.randomUUID();
+    const conta = { id: `u${Date.now().toString(36)}`, nome, sal, hash: pin ? await hashPin(pin, sal) : null };
+    contas.push(conta);
+    salvarContas();
+    sessao = conta.id;
+    localStorage.setItem(CHAVE_SESSAO, sessao);
+    estado = { ...PADRAO, perfil: { nome, ...lerPerfil(fd) } };
+    salvar();
+    aviso = "";
+    info = "";
+    tela = "compra";
+    render();
+    carregarRegiao();
+  } else if (tipo === "perfil") {
+    const anterior = estado.perfil;
+    estado.perfil = { nome: dados.nome.trim().slice(0, 40), ...lerPerfil(fd) };
+    const conta = contas.find((c) => c.id === sessao);
+    if (conta) {
+      conta.nome = estado.perfil.nome;
+      salvarContas();
+    }
+    const proxyAnterior = estado.proxy;
+    estado.proxy = (dados.proxy ?? "").trim();
+    if (estado.proxy !== proxyAnterior) ofertas.clear();
     salvar();
     tela = "lista";
     render();
-    if (cidadeMudou || regiao.status === "ocioso") carregarRegiao();
+    if (anterior.cidade !== estado.perfil.cidade || regiao.status === "ocioso") carregarRegiao();
     else atualizarPrecos();
+  } else if (tipo === "compra") {
+    criarCompra(numero(dados.orcamento, 0, false), Number(dados.dias) || 30);
+    salvar();
+    tela = "lista";
+    render();
+    window.scrollTo(0, 0);
+    atualizarPrecos();
   }
 });
 
@@ -455,7 +681,8 @@ app.addEventListener("change", (e) => {
       item.prioridade = alvo.value;
       break;
     case "orcamento":
-      estado.perfil.orcamento = numero(alvo.value, 0, false);
+      estado.compra.orcamento = numero(alvo.value, 0, false);
+      info = "";
       break;
     case "mercado":
       estado.mercado = alvo.value;
@@ -505,17 +732,21 @@ app.addEventListener("click", (e) => {
       estado.lista = estado.lista.filter((i) => !i.comprado);
       break;
     case "ajustar":
-      aplicarAjuste();
+      info = resumoDoAjuste(aplicarAjuste());
       break;
     case "buscar":
       carregarRegiao(true);
       return;
+    case "sair":
+      sair();
+      render();
+      return;
     case "apagar":
-      if (!confirm("Apagar cadastro, lista e preços guardados neste aparelho?")) return;
-      localStorage.clear();
-      estado = { ...PADRAO };
-      ofertas.clear();
-      regiao = { status: "ocioso", mercados: [], descricao: "", erro: "" };
+      if (!confirm("Apagar esta conta, a lista e os preços guardados neste aparelho?")) return;
+      localStorage.removeItem(chaveUsuario(sessao));
+      contas = contas.filter((c) => c.id !== sessao);
+      salvarContas();
+      sair();
       render();
       return;
     default:
