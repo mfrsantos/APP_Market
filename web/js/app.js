@@ -73,8 +73,7 @@ function carregarUsuario(id) {
 }
 
 // --- Rascunho do cadastro/perfil (os campos são sincronizados a cada digitação) ---
-const CHAVE_MODO = "appmarket.cadastro";
-const PASSOS = ["Você", "Onde você compra", "Sua família", "Alimentação"];
+const PASSOS_FAMILIA = ["Onde você compra", "Sua família", "Alimentação"];
 
 function novoRascunho(perfil = null, proxy = "") {
   return {
@@ -91,8 +90,6 @@ function novoRascunho(perfil = null, proxy = "") {
 }
 
 let rascunho = novoRascunho();
-
-const modoCadastro = () => (localStorage.getItem(CHAVE_MODO) === "unica" ? "unica" : "passos");
 
 function montarPerfil(r) {
   const membros = limparMembros(r.membros);
@@ -172,7 +169,7 @@ function entrarNaConta(id) {
   tela = "compra";
   aviso = "";
   info = "";
-  carregarRegiao();
+  if (!estado.perfil.pendente) carregarRegiao();
 }
 
 function sair() {
@@ -385,48 +382,38 @@ function secaoRestricoes(r) {
       <input data-r="outras" maxlength="120" value="${esc(r.outras)}"></label>`;
 }
 
-const alternadorModo = () =>
-  `<button type="button" class="link" data-acao="modo-cadastro">🔀 Ver o outro modelo de cadastro (${modoCadastro() === "passos" ? "tela única" : "passo a passo"})</button>`;
+function htmlCadastro() {
+  return `
+    <h1>Criar conta</h1>
+    <form data-form="cadastro" class="cartao" novalidate>
+      <h2>👋 Como podemos te chamar?</h2>
+      ${secaoVoce(rascunho, true)}
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+      <button class="primario" type="submit">Criar conta</button>
+    </form>
+    ${contas.length ? '<button type="button" data-tela="entrar">Já tenho conta</button>' : ""}
+    <p class="dica">Seus dados ficam salvos só neste aparelho.</p>`;
+}
 
-function htmlCadastroPassos(r) {
-  const ultimo = PASSOS.length - 1;
+// Depois de criar a conta: local, família e alimentação, em passos
+function htmlFamilia(r) {
+  const ultimo = PASSOS_FAMILIA.length - 1;
   const corpo = [
-    () => `<h2>👋 Como podemos te chamar?</h2>${secaoVoce(r, true)}`,
     () => `<h2>📍 Onde você faz suas compras?</h2>${secaoOnde(r)}`,
     () => `<h2>👨‍👩‍👧 Quem faz parte da sua família?</h2>${secaoFamilia(r)}`,
     () => `<h2>🥗 Restrições alimentares</h2>${secaoRestricoes(r)}`,
   ][r.passo]();
   return `
-    <h1>Criar conta</h1>
-    <p class="dica">Passo ${r.passo + 1} de ${PASSOS.length} · ${PASSOS[r.passo]}</p>
-    <div class="barra"><div style="width:${((r.passo + 1) / PASSOS.length) * 100}%"></div></div>
-    <form data-form="cadastro" class="cartao" novalidate>
+    <h1>Olá, ${esc(r.nome)}!</h1>
+    <p class="dica">Vamos conhecer sua família · Passo ${r.passo + 1} de ${PASSOS_FAMILIA.length} · ${PASSOS_FAMILIA[r.passo]}</p>
+    <div class="barra"><div style="width:${((r.passo + 1) / PASSOS_FAMILIA.length) * 100}%"></div></div>
+    <form data-form="onboarding" class="cartao" novalidate>
       ${corpo}
       ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
-      <button class="primario" type="submit">${r.passo === ultimo ? "Criar conta e entrar" : "Próximo ➜"}</button>
+      <button class="primario" type="submit">${r.passo === ultimo ? "Concluir ✔" : "Próximo ➜"}</button>
       ${r.passo > 0 ? '<button type="button" data-acao="voltar">⬅ Voltar</button>' : ""}
-    </form>`;
-}
-
-function htmlCadastroUnico(r) {
-  return `
-    <h1>Criar conta</h1>
-    <form data-form="cadastro" novalidate>
-      <section class="cartao"><h2>👤 Você</h2>${secaoVoce(r, true)}</section>
-      <section class="cartao"><h2>📍 Onde você compra</h2>${secaoOnde(r)}</section>
-      <section class="cartao"><h2>👨‍👩‍👧 Sua família</h2>${secaoFamilia(r)}</section>
-      <section class="cartao"><h2>🥗 Alimentação</h2>${secaoRestricoes(r)}</section>
-      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
-      <button class="primario" type="submit">Criar conta e entrar</button>
-    </form>`;
-}
-
-function htmlCadastro() {
-  return `
-    ${modoCadastro() === "passos" ? htmlCadastroPassos(rascunho) : htmlCadastroUnico(rascunho)}
-    ${contas.length ? '<button type="button" data-tela="entrar">Já tenho conta</button>' : ""}
-    <p class="dica">Seus dados ficam salvos só neste aparelho.</p>
-    ${alternadorModo()}`;
+    </form>
+    <button type="button" class="link" data-acao="sair">Sair da conta</button>`;
 }
 
 function htmlPerfil() {
@@ -698,6 +685,15 @@ function render() {
     return;
   }
   if (tela === "entrar" || tela === "cadastro") tela = "compra";
+  if (estado.perfil.pendente) {
+    if (!rascunho.onboarding) {
+      rascunho = novoRascunho(estado.perfil);
+      rascunho.onboarding = true;
+    }
+    raiz.innerHTML = `${botaoTema()}<div class="tela">${htmlFamilia(rascunho)}</div>`;
+    window.scrollTo(0, rolagem);
+    return;
+  }
   const conteudo =
     tela === "mercados"
       ? htmlMercados()
@@ -854,23 +850,12 @@ app.addEventListener("submit", async (e) => {
     entrarNaConta(conta.id);
     render();
   } else if (tipo === "cadastro") {
-    const passos = modoCadastro() === "passos";
-    if (passos && rascunho.passo < PASSOS.length - 1) {
-      aviso = validarRascunho(rascunho, rascunho.passo);
-      if (!aviso) rascunho.passo += 1;
-      render();
-      window.scrollTo(0, 0);
-      return;
-    }
-    const falha = [0, 1, 2].find((p) => validarRascunho(rascunho, p));
-    if (falha !== undefined) {
-      aviso = validarRascunho(rascunho, falha);
-      if (passos) rascunho.passo = falha;
+    aviso = validarRascunho(rascunho, 0);
+    if (aviso) {
       render();
       return;
     }
-    aviso = "";
-    const perfil = montarPerfil(rascunho);
+    const perfil = { ...montarPerfil(rascunho), cidade: "", estado: "MG", pendente: true };
     const sal = crypto.randomUUID();
     const conta = { id: `u${Date.now().toString(36)}`, nome: perfil.nome, sal, hash: rascunho.pin ? await hashPin(rascunho.pin, sal) : null };
     contas.push(conta);
@@ -882,6 +867,23 @@ app.addEventListener("submit", async (e) => {
     rascunho = novoRascunho();
     aviso = "";
     info = "";
+    tela = "compra";
+    render();
+  } else if (tipo === "onboarding") {
+    aviso = validarRascunho(rascunho, rascunho.passo + 1);
+    if (!aviso && rascunho.passo < PASSOS_FAMILIA.length - 1) {
+      rascunho.passo += 1;
+      render();
+      window.scrollTo(0, 0);
+      return;
+    }
+    if (aviso) {
+      render();
+      return;
+    }
+    estado.perfil = montarPerfil(rascunho);
+    salvar();
+    rascunho = novoRascunho();
     tela = "compra";
     render();
     carregarRegiao();
@@ -1021,11 +1023,6 @@ app.addEventListener("click", (e) => {
       render();
       window.scrollTo(0, 0);
       return;
-    case "modo-cadastro":
-      localStorage.setItem(CHAVE_MODO, modoCadastro() === "passos" ? "unica" : "passos");
-      aviso = "";
-      render();
-      return;
     case "remover":
       estado.lista = estado.lista.filter((i) => i.id !== botao.dataset.id);
       abertos.delete(botao.dataset.id);
@@ -1065,7 +1062,7 @@ app.addEventListener("click", (e) => {
 });
 
 render();
-if (estado.perfil) carregarRegiao();
+if (estado.perfil && !estado.perfil.pendente) carregarRegiao();
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("sw.js").catch(() => {});

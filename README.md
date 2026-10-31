@@ -8,6 +8,7 @@ HTML + CSS + JavaScript puro (PWA), sem instalar nada. Funciona offline depois d
 
 - Conta local: nome, PIN opcional, cidade, estado, adultos, idades das crianças e restrições alimentares (sem lactose, sem glúten, vegetariano, diabetes, alergia a ovo). Dados guardados só no aparelho (localStorage); contas antigas são migradas.
 - Nova compra: após entrar, você informa o valor e o período (1 semana, 15 dias ou 1 mês). A lista é gerada para a família (crianças pesam menos que adultos; fraldas para menores de 3 anos), nesta ordem: **alimentação básica → limpeza e higiene → opcionais**, respeitando as restrições. O que não couber no valor é reduzido/adiado, começando pelos opcionais.
+- Cadastro: só nome e PIN (opcional). Em seguida, em passos: cidade/estado, família (adultos e crianças com nome opcional e idade) e restrições alimentares.
 - Os preços iniciais são **estimativas de referência** (marcadas como "preço estimado") até você informar o preço da prateleira ou haver preço online.
 - Lista de compras em duas abas: **Lista sugerida** (gerada pelo app) e **Lista manual** (você adiciona os produtos e informa quantidade e preço na loja; o gasto é somado automaticamente e mostra quanto resta do orçamento, ou quanto passou).
 - Tema claro/escuro: botão ☀️/🌙 no topo (segue o tema do aparelho até você escolher).
