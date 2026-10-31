@@ -3,10 +3,24 @@
   --verde-escuro: #15803d;
   --fundo: #f3f4f6;
   --cartao: #fff;
+  --campo: #fff;
   --texto: #111827;
   --suave: #6b7280;
   --erro: #dc2626;
   --borda: #e5e7eb;
+  color-scheme: light;
+}
+
+:root[data-tema="escuro"] {
+  --verde-escuro: #4ade80;
+  --fundo: #0f172a;
+  --cartao: #1e293b;
+  --campo: #0f172a;
+  --texto: #f1f5f9;
+  --suave: #94a3b8;
+  --erro: #f87171;
+  --borda: #334155;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -39,16 +53,16 @@ input, select, button {
   padding: 8px 12px;
   border: 1px solid var(--borda);
   border-radius: 10px;
-  background: #fff;
+  background: var(--campo);
   color: var(--texto);
 }
 
 label input, label select { margin-top: 4px; }
 
-button { cursor: pointer; font-weight: 600; margin-top: 4px; }
+button { cursor: pointer; font-weight: 600; margin-top: 4px; background: var(--cartao); }
 button.primario { background: var(--verde); border-color: var(--verde); color: #fff; }
 button.primario:active { background: var(--verde-escuro); }
-button.perigo { color: var(--erro); border-color: var(--erro); background: #fff; margin-top: 12px; }
+button.perigo { color: var(--erro); border-color: var(--erro); background: var(--cartao); margin-top: 12px; }
 
 .cartao, .item, .mercado {
   background: var(--cartao);
@@ -75,6 +89,20 @@ details[open] summary { padding-bottom: 12px; }
 .metricas div { background: var(--cartao); border: 1px solid var(--borda); border-radius: 14px; padding: 10px 14px; }
 .metricas small { display: block; color: var(--suave); }
 .metricas strong { font-size: 1.25rem; }
+.metricas.tres { grid-template-columns: 1fr 1fr 1fr; }
+.metricas.tres strong { font-size: 1.05rem; }
+.metricas .alerta strong { color: var(--erro); }
+
+.linha-manual { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 0 38px; }
+.linha-manual label { margin: 0; font-size: 0.8rem; }
+.abas { display: flex; gap: 8px; margin-bottom: 12px; }
+button.tema {
+  position: absolute; top: calc(8px + env(safe-area-inset-top)); right: 10px; z-index: 10;
+  width: 44px; padding: 0; margin: 0; border-radius: 50%; font-size: 1.2rem;
+}
+.tela h1 { padding-right: 52px; }
+.abas button { margin: 0; }
+.abas button.ativo { background: var(--verde); border-color: var(--verde); color: #fff; }
 
 .barra { height: 10px; background: var(--borda); border-radius: 6px; overflow: hidden; margin: 6px 0 8px; }
 .barra div { height: 100%; background: var(--verde); }
@@ -94,7 +122,7 @@ nav {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   display: flex;
-  background: #fff;
+  background: var(--cartao);
   border-top: 1px solid var(--borda);
   padding-bottom: env(safe-area-inset-bottom);
 }

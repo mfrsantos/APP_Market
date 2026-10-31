@@ -11,6 +11,8 @@ const chaveUsuario = (id) => `appmarket.u.${id}`;
 const PADRAO = {
   perfil: null, // {nome, cidade, estado, adultos, criancas: [idades], restricoes: [], outras}
   lista: [],
+  manual: [],
+  aba: "sugerida",
   compra: { orcamento: 0, dias: 30 },
   mercado: null,
   proxy: "",
@@ -31,7 +33,7 @@ let contas = lerContas();
 let sessao = localStorage.getItem(CHAVE_SESSAO);
 if (sessao && !contas.some((c) => c.id === sessao)) sessao = null;
 let estado = sessao ? carregarUsuario(sessao) : { ...PADRAO };
-let tela = sessao ? "compra" : contas.length ? "entrar" : "cadastro";
+let tela = sessao ? (estado.lista.length || estado.manual.length ? "lista" : "compra") : contas.length ? "entrar" : "cadastro";
 let regiao = { status: "ocioso", mercados: [], descricao: "", erro: "" };
 const ofertas = new Map(); // "rede|produto" -> {oferta, erro} | {pendente: true}
 const abertos = new Set(); // itens com o painel "Editar" aberto
@@ -66,6 +68,34 @@ function salvar() {
 function salvarContas() {
   localStorage.setItem(CHAVE_CONTAS, JSON.stringify(contas));
 }
+
+// --- Tema (vale para todo o aparelho) ---
+const CHAVE_TEMA = "appmarket.tema";
+const escuroDoSistema = matchMedia("(prefers-color-scheme: dark)");
+
+function temaEscuro() {
+  const t = localStorage.getItem(CHAVE_TEMA) ?? "auto";
+  return t === "escuro" || (t === "auto" && escuroDoSistema.matches);
+}
+
+function aplicarTema() {
+  const escuro = temaEscuro();
+  if (escuro) document.documentElement.dataset.tema = "escuro";
+  else delete document.documentElement.dataset.tema;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", escuro ? "#0f172a" : "#16a34a");
+}
+
+function alternarTema() {
+  localStorage.setItem(CHAVE_TEMA, temaEscuro() ? "claro" : "escuro");
+  aplicarTema();
+  render();
+}
+
+escuroDoSistema.addEventListener("change", () => {
+  aplicarTema();
+  render();
+});
+aplicarTema();
 
 async function hashPin(pin, sal) {
   const bytes = new TextEncoder().encode(`${sal}:${pin}`);
@@ -392,7 +422,7 @@ function htmlItem(item) {
     </article>`;
 }
 
-function htmlLista() {
+function htmlSugerida() {
   const t = totais();
   const itens = estado.lista;
   return `
@@ -426,6 +456,74 @@ function htmlLista() {
     ${itens.some((i) => i.comprado) ? '<button data-acao="limpar">Limpar itens comprados</button>' : ""}
     ${itens.length ? "" : '<p class="dica">Sua lista está vazia. Adicione um produto acima.</p>'}
     <p class="dica">Os preços online podem diferir da loja física. Confira na prateleira e, se mudar, informe o valor em “Editar”.</p>`;
+}
+
+function totaisManual() {
+  const orcamento = estado.compra.orcamento;
+  const comprados = estado.manual.filter((i) => i.comprado);
+  const gasto = comprados.reduce((s, i) => s + i.preco * i.quantidade, 0);
+  return {
+    orcamento,
+    gasto,
+    restante: orcamento - gasto,
+    semPreco: comprados.filter((i) => !(i.preco > 0)).length,
+    pendentes: estado.manual.length - comprados.length,
+  };
+}
+
+function htmlItemManual(item) {
+  const subtotal = item.preco > 0 ? ` = ${brl(item.preco * item.quantidade)}` : "";
+  return `
+    <article class="item ${item.comprado ? "feito" : ""}">
+      <label class="marcar"><input type="checkbox" data-campo="m-comprado" data-id="${item.id}" ${item.comprado ? "checked" : ""}>
+        <span>${esc(item.produto)}</span></label>
+      <div class="sub">${item.quantidade} × ${item.preco > 0 ? brl(item.preco) : "sem preço"}${subtotal}</div>
+      <div class="linha-manual">
+        <label>Quantidade
+          <input type="number" min="1" step="1" inputmode="numeric" data-campo="m-quantidade" data-id="${item.id}" value="${item.quantidade}"></label>
+        <label>Preço unitário (R$)
+          <input type="number" min="0" step="0.01" inputmode="decimal" data-campo="m-preco" data-id="${item.id}" value="${item.preco || ""}" placeholder="0,00"></label>
+      </div>
+      <button class="perigo" data-acao="m-remover" data-id="${item.id}">🗑️ Remover</button>
+    </article>`;
+}
+
+function htmlManual() {
+  const t = totaisManual();
+  const limite = t.orcamento > 0;
+  const pct = limite ? Math.min(100, (t.gasto / t.orcamento) * 100) : 0;
+  const estourou = limite && t.gasto > t.orcamento;
+  return `
+    <form data-form="adicionar-manual" class="adicionar">
+      <input name="produto" placeholder="Produto, ex.: Café 500g" maxlength="80" autocomplete="off" required>
+      <button class="primario" type="submit">➕</button>
+    </form>
+    ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+    <div class="cartao">
+      <label>💰 Orçamento desta compra (R$) — 0 = sem limite
+        <input type="number" min="0" step="0.01" inputmode="decimal" data-campo="orcamento" value="${t.orcamento}"></label>
+      ${limite ? `<div class="barra"><div style="width:${pct}%" class="${estourou ? "estouro" : ""}"></div></div>` : ""}
+      <div class="metricas tres">
+        <div><small>Orçamento</small><strong>${limite ? brl(t.orcamento) : "sem limite"}</strong></div>
+        <div><small>Gasto até agora</small><strong>${brl(t.gasto)}</strong></div>
+        <div class="${estourou ? "alerta" : ""}"><small>${estourou ? "Passou" : "Resta"}</small><strong>${limite ? brl(Math.abs(t.restante)) : "—"}</strong></div>
+      </div>
+      ${estourou ? `<p class="erro">Você ultrapassou o orçamento em ${brl(t.gasto - t.orcamento)}.</p>` : ""}
+      ${t.semPreco ? `<p class="dica">${t.semPreco} item(ns) marcado(s) como comprado(s) sem preço — informe o valor para entrar na soma.</p>` : ""}
+    </div>
+    ${estado.manual.map(htmlItemManual).join("")}
+    ${estado.manual.some((i) => i.comprado) ? '<button data-acao="m-limpar">Limpar itens comprados</button>' : ""}
+    ${estado.manual.length ? "" : '<p class="dica">Adicione os produtos, informe o preço da prateleira e marque como comprado: o total é somado automaticamente.</p>'}`;
+}
+
+function htmlLista() {
+  const aba = estado.aba;
+  return `
+    <div class="abas">
+      <button data-aba="sugerida" class="${aba === "sugerida" ? "ativo" : ""}">📋 Lista sugerida</button>
+      <button data-aba="manual" class="${aba === "manual" ? "ativo" : ""}">✍️ Lista manual</button>
+    </div>
+    ${aba === "manual" ? htmlManual() : htmlSugerida()}`;
 }
 
 function htmlMercados() {
@@ -464,11 +562,14 @@ function htmlMercados() {
     ${corpo}`;
 }
 
+const botaoTema = () =>
+  `<button class="tema" data-acao="tema" aria-label="Alternar tema claro/escuro">${temaEscuro() ? "☀️" : "🌙"}</button>`;
+
 function render() {
   const raiz = document.getElementById("app");
   const rolagem = window.scrollY;
   if (!sessao) {
-    raiz.innerHTML = `<div class="tela">${tela === "cadastro" || !contas.length ? htmlCadastro() : htmlEntrar()}</div>`;
+    raiz.innerHTML = `${botaoTema()}<div class="tela">${tela === "cadastro" || !contas.length ? htmlCadastro() : htmlEntrar()}</div>`;
     window.scrollTo(0, rolagem);
     return;
   }
@@ -482,6 +583,7 @@ function render() {
           ? htmlCompra()
           : `<h1>🛒 Lista de Compras</h1>${htmlLista()}`;
   raiz.innerHTML = `
+    ${botaoTema()}
     <div class="tela">${conteudo}</div>
     <nav>
       ${[["lista", "🛒", "Lista"], ["mercados", "📊", "Mercados"], ["compra", "💰", "Compra"], ["perfil", "👤", estado.perfil.nome]]
@@ -545,6 +647,7 @@ function aplicarAjuste() {
 }
 
 function criarCompra(orcamento, dias) {
+  estado.aba = "sugerida";
   estado.compra = { orcamento, dias };
   estado.lista = gerarLista(estado.perfil, dias).map((base) => ({
     id: `i${estado.proximoId++}`,
@@ -603,6 +706,18 @@ app.addEventListener("submit", async (e) => {
     render();
     document.querySelector('[name="produto"]')?.focus();
     atualizarPrecos();
+  } else if (tipo === "adicionar-manual") {
+    const nome = dados.produto.trim().slice(0, 80);
+    if (!nome) return;
+    if (estado.manual.some((i) => i.produto.toLowerCase() === nome.toLowerCase())) {
+      aviso = "Esse produto já está na lista manual.";
+    } else {
+      aviso = "";
+      estado.manual.push({ id: `m${estado.proximoId++}`, produto: nome, quantidade: 1, preco: 0, comprado: false });
+    }
+    salvar();
+    render();
+    document.querySelector('[name="produto"]')?.focus();
   } else if (tipo === "entrar") {
     const conta = contas.find((c) => c.id === dados.conta);
     if (!conta) return;
@@ -666,7 +781,18 @@ app.addEventListener("change", (e) => {
   const campo = alvo.dataset.campo;
   if (!campo) return;
   const item = alvo.dataset.id ? itemPorId(alvo.dataset.id) : null;
+  const manual = campo.startsWith("m-") ? estado.manual.find((i) => i.id === alvo.dataset.id) : null;
+  if (campo.startsWith("m-") && !manual) return;
   switch (campo) {
+    case "m-comprado":
+      manual.comprado = alvo.checked;
+      break;
+    case "m-quantidade":
+      manual.quantidade = numero(alvo.value, 1, true);
+      break;
+    case "m-preco":
+      manual.preco = numero(alvo.value, 0, false);
+      break;
     case "comprado":
     case "adiado":
       item[campo] = alvo.checked;
@@ -716,6 +842,17 @@ app.addEventListener(
 app.addEventListener("click", (e) => {
   const botao = e.target.closest("button");
   if (!botao) return;
+  if (botao.dataset.aba) {
+    estado.aba = botao.dataset.aba;
+    aviso = "";
+    salvar();
+    render();
+    return;
+  }
+  if (botao.dataset.acao === "tema") {
+    alternarTema();
+    return;
+  }
   if (botao.dataset.tela) {
     tela = botao.dataset.tela;
     aviso = "";
@@ -727,6 +864,12 @@ app.addEventListener("click", (e) => {
     case "remover":
       estado.lista = estado.lista.filter((i) => i.id !== botao.dataset.id);
       abertos.delete(botao.dataset.id);
+      break;
+    case "m-remover":
+      estado.manual = estado.manual.filter((i) => i.id !== botao.dataset.id);
+      break;
+    case "m-limpar":
+      estado.manual = estado.manual.filter((i) => !i.comprado);
       break;
     case "limpar":
       estado.lista = estado.lista.filter((i) => !i.comprado);
