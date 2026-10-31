@@ -25,6 +25,13 @@ Em casa, na mesma rede Wi-Fi, também dá para testar com
 
 ## Como funciona
 
+- **Cadastro**: na primeira abertura o app pede nome, cidade, estado e o valor que você quer gastar.
+  Fica salvo apenas no endereço da página, neste aparelho (sem senha e sem servidor). Para mudar,
+  toque no seu nome no topo.
+- **Orçamento**: o app compara o total previsto (carrinho + itens que faltam) com o valor que você pode gastar.
+  Se passar, sugere um ajuste: começa pelos itens **Opcional** (reduz a quantidade e, se preciso, adia o item),
+  depois **Normal** e por último **Essencial** (só reduz a quantidade, nunca adia). Você confirma em
+  "Aplicar ajuste". Defina a prioridade de cada item em "Editar".
 - **Lista**: adicione itens, marque como comprado, ajuste a quantidade e informe o preço da prateleira
   em "Editar". Os totais "Falta comprar" e "No carrinho" usam o mercado escolhido.
 - **Mercados**: compara o total entre as redes com consulta online e permite escolher onde comprar.
