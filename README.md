@@ -31,7 +31,3 @@ Qualquer hospedagem estática serve (GitHub Pages, Cloudflare Pages, Netlify). A
 ### Preços online (proxy)
 
 O navegador bloqueia (CORS) a consulta direta ao catálogo do Atacadão. Publique `worker/precos-proxy.js` como Cloudflare Worker (gratuito) e informe a URL em **Perfil > Avançado**. As demais redes (Supermercados BH, Mart Minas, Fidelis, Oliveira etc.) não têm catálogo público: use o preço da prateleira.
-
-## Versão Streamlit (alternativa, Python)
-
-`app.py`, `localizacao.py`, `precos.py`, `orcamento.py`. Requer `pip install -r requirements.txt` e `streamlit run app.py`.
