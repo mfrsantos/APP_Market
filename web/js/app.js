@@ -69,7 +69,22 @@ function lerContas() {
 function carregarUsuario(id) {
   const dados = lerJson(chaveUsuario(id), {});
   if (dados.perfil) dados.perfil.membros = membrosDoPerfil(dados.perfil);
-  return { ...PADRAO, ...dados, compra: { ...PADRAO.compra, ...dados.compra } };
+  const lista = (dados.lista ?? []).map((item) =>
+    item.categoria === "limpeza" &&
+    (item.prioridade !== "Essencial" || item.adiado)
+      ? { ...item, prioridade: "Essencial", adiado: false }
+      : item,
+  );
+  const estadoCarregado = {
+    ...PADRAO,
+    ...dados,
+    lista,
+    compra: { ...PADRAO.compra, ...dados.compra },
+  };
+  if (lista.some((item, indice) => item !== dados.lista?.[indice])) {
+    localStorage.setItem(chaveUsuario(id), JSON.stringify(estadoCarregado));
+  }
+  return estadoCarregado;
 }
 
 // --- Rascunho do cadastro/perfil (os campos são sincronizados a cada digitação) ---
@@ -452,7 +467,7 @@ function htmlCompra() {
         <select name="dias">${[[7, "1 semana"], [15, "15 dias"], [30, "1 mês"]]
           .map(([d, nome]) => `<option value="${d}" ${compra.dias === d ? "selected" : ""}>${nome}</option>`)
           .join("")}</select></label>
-      <p class="dica">A lista é montada primeiro com alimentação básica, depois limpeza e higiene e, por fim, os opcionais — cortando o que não couber no valor. Os preços são estimativas até você informar o valor da prateleira ou o preço online.</p>
+      <p class="dica">A lista é montada primeiro com alimentação básica e limpeza e higiene, depois os opcionais. O orçamento não aumenta as quantidades; sugestões de economia dependem de preços reais comparáveis. Os preços da lista são estimativas até você informar o valor da prateleira ou haver preço online.</p>
       ${estado.lista.length ? '<p class="erro">Gerar uma nova lista substitui a lista atual.</p>' : ""}
       <button class="primario" type="submit">Gerar lista</button>
     </form>
@@ -467,39 +482,58 @@ function htmlOrcamento(t) {
   if (!(orcamento > 0) || !estado.lista.length) return `<div class="cartao">${campo}</div>`;
 
   const previsto = t.falta + t.carrinho;
+  const itensAtivos = estado.lista.filter(itemAtivo);
+  const precosReaisCompletos =
+    itensAtivos.length > 0 &&
+    itensAtivos.every((item) => {
+      const { preco, origem } = precoDoItem(estado.mercado, item, true);
+      return preco !== null && origem !== "preço estimado";
+    });
+  const estimativa = itensAtivos.some(
+    (item) => precoDoItem(estado.mercado, item, true).origem === "preço estimado",
+  )
+    ? "Estimativa com preços de referência"
+    : "Estimativa parcial";
   const pct = Math.min(100, (previsto / orcamento) * 100);
   let resultado;
   if (previsto <= orcamento) {
-    resultado = `<p class="ok">Previsto: ${brl(previsto)} de ${brl(orcamento)}. Sobram ${brl(orcamento - previsto)}.</p>`;
+    resultado = precosReaisCompletos
+      ? `<p class="ok">Total pelos preços informados: ${brl(previsto)} de ${brl(orcamento)}. Sobram ${brl(orcamento - previsto)}.</p>`
+      : `<p class="ok">${estimativa}: ${brl(previsto)} de ${brl(orcamento)}. A economia real depende dos preços atualizados dos supermercados.</p>`;
   } else {
-    const plano = ajustarAoOrcamento(
-      estado.lista.filter(itemAtivo).map((i) => ({
-        id: i.id,
-        produto: i.produto,
-        prioridade: i.prioridade,
-        quantidade: i.quantidade,
-        preco: precoDoItem(estado.mercado, i, true).preco,
-        comprado: i.comprado,
-      })),
-      orcamento,
-    );
-    resultado = `<p class="erro">Previsto: ${brl(previsto)} — ${brl(previsto - orcamento)} acima do orçamento.</p>`;
-    if (plano.mudancas.length) {
-      resultado += `
-        <div class="ajuste"><strong>Ajuste sugerido</strong> (começa pelos itens opcionais):
-          <ul>${plano.mudancas
-            .map((m) => `<li>${esc(m.produto)}: ${m.para === 0 ? "adiar para outra compra" : `${m.de} → ${m.para}`}</li>`)
-            .join("")}</ul>
-          <p class="dica">${
-            plano.cabe
-              ? `Com o ajuste o total fica em ${brl(plano.total)}.`
-              : `Mesmo assim o total é ${brl(plano.total)}: os itens essenciais ultrapassam o orçamento.`
-          }</p>
-          <button class="primario" data-acao="ajustar">✅ Aplicar ajuste</button>
-        </div>`;
-    } else {
-      resultado +=
-        '<p class="dica">Não há o que reduzir: itens essenciais com quantidade 1 já ultrapassam o orçamento, ou faltam preços.</p>';
+    resultado = precosReaisCompletos
+      ? `<p class="erro">Total pelos preços informados: ${brl(previsto)} — ${brl(previsto - orcamento)} acima do orçamento.</p>`
+      : `<p class="erro">${estimativa}: ${brl(previsto)} — acima do orçamento. Aguarde preços reais para avaliar onde economizar.</p>`;
+    if (precosReaisCompletos) {
+      const plano = ajustarAoOrcamento(
+        itensAtivos.map((i) => ({
+          id: i.id,
+          produto: i.produto,
+          prioridade: i.prioridade,
+          categoria: i.categoria,
+          quantidade: i.quantidade,
+          preco: precoDoItem(estado.mercado, i, true).preco,
+          comprado: i.comprado,
+        })),
+        orcamento,
+      );
+      if (plano.mudancas.length) {
+        resultado += `
+          <div class="ajuste"><strong>Ajuste sugerido</strong> (começa pelos itens opcionais):
+            <ul>${plano.mudancas
+              .map((m) => `<li>${esc(m.produto)}: ${m.para === 0 ? "adiar para outra compra" : `${m.de} → ${m.para}`}</li>`)
+              .join("")}</ul>
+            <p class="dica">${
+              plano.cabe
+                ? `Com o ajuste o total fica em ${brl(plano.total)}.`
+                : `Mesmo assim o total é ${brl(plano.total)}: os itens essenciais ultrapassam o orçamento.`
+            }</p>
+            <button class="primario" data-acao="ajustar">✅ Aplicar ajuste</button>
+          </div>`;
+      } else {
+        resultado +=
+          '<p class="dica">Não há o que reduzir: itens essenciais com quantidade 1 já ultrapassam o orçamento.</p>';
+      }
     }
   }
   return `<div class="cartao">${campo}<div class="barra"><div style="width:${pct}%" class="${previsto > orcamento ? "estouro" : ""}"></div></div>${resultado}</div>`;
@@ -520,10 +554,14 @@ function htmlItem(item) {
         <summary>Editar</summary>
         <label>Quantidade
           <input type="number" min="1" step="1" inputmode="numeric" data-campo="quantidade" data-id="${item.id}" value="${item.quantidade}"></label>
-        <label>Prioridade (usada no ajuste do orçamento)
-          <select data-campo="prioridade" data-id="${item.id}">
-            ${PRIORIDADES.map((p) => `<option ${p === item.prioridade ? "selected" : ""}>${p}</option>`).join("")}
-          </select></label>
+        ${
+          item.categoria === "limpeza"
+            ? '<p class="dica">Item essencial — limpeza e higiene não podem ser adiadas pelo ajuste do orçamento.</p>'
+            : `<label>Prioridade (usada no ajuste do orçamento)
+                <select data-campo="prioridade" data-id="${item.id}">
+                  ${PRIORIDADES.map((p) => `<option ${p === item.prioridade ? "selected" : ""}>${p}</option>`).join("")}
+                </select></label>`
+        }
         <label class="marcar"><input type="checkbox" data-campo="adiado" data-id="${item.id}" ${item.adiado ? "checked" : ""}>
           <span>Adiar para outra compra</span></label>
         <label>Preço na prateleira (R$) — 0 usa o preço online
@@ -641,6 +679,13 @@ function htmlMercados() {
   const comp = comparativo();
   const consultaveis = new Set(comp.map((c) => c.rede.nome));
   const outros = regiao.mercados.filter((m) => !consultaveis.has(m.rede.nome));
+  const completos = comp.filter((c) => c.faltando === 0);
+  const economia =
+    completos.length >= 2
+      ? [...completos].sort((a, b) => a.total - b.total)
+      : [];
+  const melhorPreco = economia[0];
+  const piorPreco = economia[economia.length - 1];
   let corpo;
   if (regiao.status === "carregando") corpo = '<p class="dica">Buscando supermercados na região…</p>';
   else if (regiao.status === "erro") corpo = `<p class="erro">${esc(regiao.erro)}</p>`;
@@ -652,6 +697,11 @@ function htmlMercados() {
         <span><strong>${esc(m.rede.nome)}</strong> · ${m.loja.distanciaKm.toFixed(1)} km<br><small>${detalhe}</small></span>
       </label>`;
     corpo = `<p class="dica">Perto de ${esc(regiao.descricao)}. Escolha onde vai comprar:</p>
+      ${
+        economia.length >= 2 && piorPreco.total > melhorPreco.total
+          ? `<p class="ok">Pelos preços online disponíveis, a lista fica ${brl(piorPreco.total - melhorPreco.total)} mais barata em ${esc(melhorPreco.rede.nome)} (${melhorPreco.loja.distanciaKm.toFixed(1)} km) do que em ${esc(piorPreco.rede.nome)}. Comparação válida porque todos os itens têm preço.</p>`
+          : ""
+      }
       ${comp.map((c) => linha(c, `${brl(c.total)}${c.faltando ? ` · ${c.faltando} sem preço` : ""}`)).join("")}
       ${outros.map((m) => linha(m, "sem consulta online — use o preço da prateleira")).join("")}
       ${!comp.length ? `<p class="dica">${estado.proxy ? "Nenhuma rede encontrada tem consulta online." : "Preços online desligados: configure o proxy em Perfil > Avançado."}</p>` : ""}`;
@@ -748,6 +798,7 @@ function planoDoOrcamento() {
       id: i.id,
       produto: i.produto,
       prioridade: i.prioridade,
+      categoria: i.categoria,
       quantidade: i.quantidade,
       preco: precoDoItem(estado.mercado, i, true).preco,
       comprado: i.comprado,
@@ -781,11 +832,6 @@ function criarCompra(orcamento, dias) {
     estimativa: base.estimativa,
   }));
   info = "";
-  if (orcamento > 0) {
-    const plano = aplicarAjuste();
-    info = plano.mudancas.length ? resumoDoAjuste(plano) : "Toda a lista cabe no seu orçamento.";
-    if (!plano.cabe) info += " Mesmo assim os itens essenciais passam do valor informado.";
-  }
 }
 
 function numero(valor, minimo, inteiro) {
@@ -946,7 +992,7 @@ app.addEventListener("change", (e) => {
       item.preco = numero(alvo.value, 0, false);
       break;
     case "prioridade":
-      item.prioridade = alvo.value;
+      item.prioridade = item.categoria === "limpeza" ? "Essencial" : alvo.value;
       break;
     case "orcamento":
       estado.compra.orcamento = numero(alvo.value, 0, false);

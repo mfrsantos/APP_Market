@@ -27,7 +27,10 @@ export function ajustarAoOrcamento(itens, orcamento) {
     lista.reduce((a, b) => (b.preco * b.quantidade > a.preco * a.quantidade ? b : a));
 
   for (const prioridade of [...PRIORIDADES].reverse()) {
-    const grupo = [...pendentes.values()].filter((i) => i.prioridade === prioridade);
+    const grupo = [...pendentes.values()].filter((i) => {
+      const prioridadeEfetiva = i.categoria === "limpeza" ? "Essencial" : i.prioridade;
+      return prioridadeEfetiva === prioridade;
+    });
     while (estourou()) {
       const reduziveis = grupo.filter((i) => i.quantidade > 1);
       if (!reduziveis.length) break;

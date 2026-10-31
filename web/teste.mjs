@@ -16,6 +16,26 @@ assert.equal(r.total, 20);
 assert.ok(!r.cabe);
 assert.equal(r.mudancas.find((m) => m.id === "arroz").para, 1);
 
+r = ajustarAoOrcamento(
+  [
+    { ...it("arroz", "Essencial", 1, 10), categoria: "alimentacao" },
+    { ...it("detergente", "Opcional", 1, 5), categoria: "limpeza" },
+    { ...it("biscoito", "Opcional", 1, 10), categoria: "opcional" },
+  ],
+  15,
+);
+assert.deepEqual(r.mudancas, [{ id: "biscoito", produto: "biscoito", de: 1, para: 0 }]);
+assert.equal(r.total, 15);
+assert.ok(r.cabe);
+
+r = ajustarAoOrcamento(
+  [{ ...it("detergente", "Opcional", 2, 5), categoria: "limpeza" }],
+  5,
+);
+assert.deepEqual(r.mudancas, [{ id: "detergente", produto: "detergente", de: 2, para: 1 }]);
+assert.equal(r.total, 5);
+assert.ok(r.cabe);
+
 r = ajustarAoOrcamento([it("a", "Normal", 1, 10, true), it("b", "Normal", 2, 10)], 25);
 assert.equal(r.total, 20);
 assert.ok(r.cabe);
@@ -59,6 +79,7 @@ const nomes = (l) => l.map((i) => i.produto);
 const fam = { adultos: 2, criancas: [1, 8], restricoes: [] };
 let g = gerarLista(fam, 30);
 assert.deepEqual([...new Set(g.map((i) => i.categoria))], ["alimentacao", "limpeza", "opcional"]);
+assert.ok(g.filter((i) => i.categoria === "limpeza").every((i) => i.prioridade === "Essencial"));
 assert.ok(nomes(g).includes("Fralda descartável (pacote)"));
 assert.ok(g.every((i) => i.quantidade >= 1 && i.estimativa > 0));
 assert.ok(gerarLista(fam, 7).find((i) => i.produto === "Arroz 5kg").quantidade <= g.find((i) => i.produto === "Arroz 5kg").quantidade);

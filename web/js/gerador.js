@@ -1,6 +1,5 @@
 // Gera a lista de compras a partir da família, das restrições e do período.
-// Os preços são ESTIMATIVAS de referência (editáveis): servem para encaixar a lista no
-// orçamento até que o preço real da prateleira ou online seja informado.
+// Os preços são ESTIMATIVAS de referência (editáveis), não preços confirmados de mercado.
 
 export const RESTRICOES = {
   lactose: "Sem lactose",
@@ -12,7 +11,7 @@ export const RESTRICOES = {
 
 export const CATEGORIAS = {
   alimentacao: { titulo: "🍚 Alimentação básica", prioridade: "Essencial" },
-  limpeza: { titulo: "🧼 Limpeza e higiene", prioridade: "Normal" },
+  limpeza: { titulo: "🧼 Limpeza e higiene", prioridade: "Essencial" },
   opcional: { titulo: "🍫 Opcionais", prioridade: "Opcional" },
   extra: { titulo: "➕ Adicionados por mim", prioridade: "Normal" },
 };
