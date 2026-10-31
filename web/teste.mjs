@@ -44,6 +44,16 @@ const d = distanciaKm(-19.7375, -45.2517, -19.7375, -45.2517 + 0.1);
 assert.ok(d > 10 && d < 11.5, d);
 
 import { gerarLista } from "./js/gerador.js";
+import { descreverFamilia, limparMembros, membrosDoPerfil, novoMembro, resumoFamilia, validarMembros } from "./js/familia.js";
+
+const kids = [{ nome: "Ana", adulto: false, idade: "7" }, { nome: "", adulto: false, idade: "1" }, { nome: "João", adulto: true, idade: "" }];
+assert.deepEqual(resumoFamilia(kids), { adultos: 2, criancas: [7, 1] });
+assert.equal(validarMembros(kids), "");
+assert.ok(validarMembros([novoMembro(false)]));
+assert.ok(validarMembros([{ nome: "", adulto: false, idade: "18" }]));
+assert.equal(descreverFamilia("Marcus", kids), "Marcus (você), Ana (7 anos), Criança (1 ano), João");
+assert.deepEqual(resumoFamilia(membrosDoPerfil({ adultos: 2, criancas: [3] })), { adultos: 2, criancas: [3] });
+assert.deepEqual(limparMembros([{ nome: "  Zé ", adulto: false, idade: "4.4" }]), [{ nome: "Zé", adulto: false, idade: "4" }]);
 
 const nomes = (l) => l.map((i) => i.produto);
 const fam = { adultos: 2, criancas: [1, 8], restricoes: [] };

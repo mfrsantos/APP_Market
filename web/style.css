@@ -96,6 +96,18 @@ details[open] summary { padding-bottom: 12px; }
 .linha-manual { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0 0 38px; }
 .linha-manual label { margin: 0; font-size: 0.8rem; }
 .abas { display: flex; gap: 8px; margin-bottom: 12px; }
+
+section.cartao h2 { margin-bottom: 10px; }
+.membro-linha { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.membro-linha input { margin: 0; flex: 1; min-width: 0; }
+.membro-linha input.idade { flex: none; width: 84px; }
+.membro-linha .avatar { font-size: 1.5rem; flex: none; }
+.membro-linha .remover { flex: none; width: 44px; padding: 0; margin: 0; color: var(--erro); }
+.membro-linha.voce small { color: var(--suave); }
+.duplo { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.duplo button { margin: 0; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.link { background: none; border: 0; color: var(--suave); font-weight: 400; font-size: 0.85rem; text-decoration: underline; margin-top: 12px; }
 button.tema {
   position: absolute; top: calc(8px + env(safe-area-inset-top)); right: 10px; z-index: 10;
   width: 44px; padding: 0; margin: 0; border-radius: 50%; font-size: 1.2rem;

@@ -2,6 +2,16 @@ import { PRIORIDADES, ajustarAoOrcamento } from "./orcamento.js";
 import { identificarRede, normalizar, temConsultaOnline, consultarPrecoCache } from "./redes.js";
 import { buscarSupermercados, geocodificarCidade, posicaoDoAparelho } from "./mapas.js";
 import { CATEGORIAS, RESTRICOES, gerarLista } from "./gerador.js";
+import {
+  MAX_MEMBROS,
+  descreverFamilia,
+  limparMembros,
+  membrosDoPerfil,
+  novoMembro,
+  resumoFamilia,
+  rotuloMembro,
+  validarMembros,
+} from "./familia.js";
 
 const CHAVE_ANTIGA = "appmarket.v1";
 const CHAVE_CONTAS = "appmarket.contas";
@@ -58,7 +68,57 @@ function lerContas() {
 
 function carregarUsuario(id) {
   const dados = lerJson(chaveUsuario(id), {});
+  if (dados.perfil) dados.perfil.membros = membrosDoPerfil(dados.perfil);
   return { ...PADRAO, ...dados, compra: { ...PADRAO.compra, ...dados.compra } };
+}
+
+// --- Rascunho do cadastro/perfil (os campos são sincronizados a cada digitação) ---
+const CHAVE_MODO = "appmarket.cadastro";
+const PASSOS = ["Você", "Onde você compra", "Sua família", "Alimentação"];
+
+function novoRascunho(perfil = null, proxy = "") {
+  return {
+    nome: perfil?.nome ?? "",
+    pin: "",
+    cidade: perfil?.cidade ?? "Bom Despacho",
+    estado: perfil?.estado ?? "MG",
+    membros: perfil ? structuredClone(perfil.membros) : [],
+    restricoes: [...(perfil?.restricoes ?? [])],
+    outras: perfil?.outras ?? "",
+    proxy,
+    passo: 0,
+  };
+}
+
+let rascunho = novoRascunho();
+
+const modoCadastro = () => (localStorage.getItem(CHAVE_MODO) === "unica" ? "unica" : "passos");
+
+function montarPerfil(r) {
+  const membros = limparMembros(r.membros);
+  const { adultos, criancas } = resumoFamilia(membros);
+  return {
+    nome: r.nome.trim().slice(0, 40),
+    cidade: r.cidade.trim().slice(0, 60),
+    estado: r.estado.trim().slice(0, 2).toUpperCase(),
+    membros,
+    adultos,
+    criancas,
+    restricoes: r.restricoes.filter((x) => x in RESTRICOES),
+    outras: r.outras.trim().slice(0, 120),
+  };
+}
+
+// Valida só o trecho pedido: passo (0 a 3) ou todos (null)
+function validarRascunho(r, passo = null) {
+  const em = (p) => passo === null || passo === p;
+  if (em(0)) {
+    if (!r.nome.trim()) return "Informe seu nome.";
+    if (r.pin && !/^\d{4,8}$/.test(r.pin)) return "O PIN deve ter de 4 a 8 números.";
+  }
+  if (em(1) && !r.cidade.trim()) return "Informe a cidade.";
+  if (em(2)) return validarMembros(r.membros);
+  return "";
 }
 
 function salvar() {
@@ -116,6 +176,7 @@ function entrarNaConta(id) {
 }
 
 function sair() {
+  rascunho = novoRascunho();
   sessao = null;
   localStorage.removeItem(CHAVE_SESSAO);
   estado = { ...PADRAO };
@@ -273,66 +334,129 @@ function htmlEntrar() {
     <p class="dica">As contas ficam só neste aparelho (sem servidor). O PIN apenas impede que outra pessoa abra sua conta aqui.</p>`;
 }
 
-function camposPerfil(perfil = {}) {
-  const marcadas = new Set(perfil.restricoes ?? []);
+const secaoVoce = (r, comPin) => `
+  <label>Seu nome <input data-r="nome" required maxlength="40" autocomplete="given-name" value="${esc(r.nome)}"></label>
+  ${
+    comPin
+      ? `<label>PIN de 4 a 8 números (opcional)
+          <input data-r="pin" type="password" inputmode="numeric" maxlength="8" autocomplete="new-password" value="${esc(r.pin)}"></label>
+        <p class="dica">O PIN só impede que outra pessoa abra sua conta neste aparelho.</p>`
+      : ""
+  }`;
+
+const secaoOnde = (r) => `
+  <label>Cidade <input data-r="cidade" required maxlength="60" value="${esc(r.cidade)}"></label>
+  <label>Estado (sigla) <input data-r="estado" maxlength="2" value="${esc(r.estado)}"></label>`;
+
+function secaoFamilia(r) {
+  const { adultos, criancas } = resumoFamilia(r.membros);
+  const cheia = r.membros.length >= MAX_MEMBROS;
+  const linhas = r.membros
+    .map(
+      (m, i) => `
+      <div class="membro-linha">
+        <span class="avatar">${m.adulto ? "🧑" : "🧒"}</span>
+        <input data-m="${i}" data-mc="nome" maxlength="30" placeholder="${m.adulto ? "Nome do adulto" : "Nome da criança"} (opcional)" value="${esc(m.nome)}" aria-label="Nome">
+        ${m.adulto ? "" : `<input class="idade" data-m="${i}" data-mc="idade" type="number" min="0" max="17" inputmode="numeric" placeholder="Idade" value="${esc(m.idade)}" aria-label="Idade em anos">`}
+        <button type="button" class="remover" data-acao="rem-membro" data-idx="${i}" aria-label="Remover">✕</button>
+      </div>`,
+    )
+    .join("");
   return `
-    <label>Cidade <input name="cidade" required maxlength="60" value="${esc(perfil.cidade ?? "Bom Despacho")}"></label>
-    <label>Estado (sigla) <input name="estado" maxlength="2" value="${esc(perfil.estado ?? "MG")}"></label>
-    <label>Adultos (13 anos ou mais)
-      <input name="adultos" type="number" min="1" max="20" inputmode="numeric" required value="${perfil.adultos ?? 1}"></label>
-    <label>Idades das crianças (até 12 anos, separadas por vírgula; deixe vazio se não houver)
-      <input name="criancas" inputmode="text" placeholder="ex.: 2, 7" value="${esc((perfil.criancas ?? []).join(", "))}"></label>
+    <div class="membro-linha voce"><span class="avatar">🙋</span><strong>${esc(r.nome.trim() || "Você")}</strong><small>você · adulto</small></div>
+    ${linhas}
+    <div class="duplo">
+      <button type="button" data-acao="add-membro" data-tipo="adulto" ${cheia ? "disabled" : ""}>➕ Adulto</button>
+      <button type="button" data-acao="add-membro" data-tipo="crianca" ${cheia ? "disabled" : ""}>➕ Criança</button>
+    </div>
+    <p class="dica">${adultos} adulto(s) e ${criancas.length} criança(s). Crianças e adolescentes de 0 a 17 anos: a idade ajusta as quantidades.</p>`;
+}
+
+function secaoRestricoes(r) {
+  const marcadas = new Set(r.restricoes);
+  return `
     <fieldset>
-      <legend>Restrições alimentares da família</legend>
+      <legend>Alguém da família tem restrição alimentar?</legend>
       ${Object.entries(RESTRICOES)
-        .map(([id, nome]) => `<label class="marcar"><input type="checkbox" name="restricoes" value="${id}" ${marcadas.has(id) ? "checked" : ""}><span>${esc(nome)}</span></label>`)
+        .map(([id, nome]) => `<label class="marcar"><input type="checkbox" data-r="restricao" value="${id}" ${marcadas.has(id) ? "checked" : ""}><span>${esc(nome)}</span></label>`)
         .join("")}
     </fieldset>
     <label>Outras restrições (só para lembrar, não altera a lista)
-      <input name="outras" maxlength="120" value="${esc(perfil.outras ?? "")}"></label>`;
+      <input data-r="outras" maxlength="120" value="${esc(r.outras)}"></label>`;
+}
+
+const alternadorModo = () =>
+  `<button type="button" class="link" data-acao="modo-cadastro">🔀 Ver o outro modelo de cadastro (${modoCadastro() === "passos" ? "tela única" : "passo a passo"})</button>`;
+
+function htmlCadastroPassos(r) {
+  const ultimo = PASSOS.length - 1;
+  const corpo = [
+    () => `<h2>👋 Como podemos te chamar?</h2>${secaoVoce(r, true)}`,
+    () => `<h2>📍 Onde você faz suas compras?</h2>${secaoOnde(r)}`,
+    () => `<h2>👨‍👩‍👧 Quem faz parte da sua família?</h2>${secaoFamilia(r)}`,
+    () => `<h2>🥗 Restrições alimentares</h2>${secaoRestricoes(r)}`,
+  ][r.passo]();
+  return `
+    <h1>Criar conta</h1>
+    <p class="dica">Passo ${r.passo + 1} de ${PASSOS.length} · ${PASSOS[r.passo]}</p>
+    <div class="barra"><div style="width:${((r.passo + 1) / PASSOS.length) * 100}%"></div></div>
+    <form data-form="cadastro" class="cartao" novalidate>
+      ${corpo}
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+      <button class="primario" type="submit">${r.passo === ultimo ? "Criar conta e entrar" : "Próximo ➜"}</button>
+      ${r.passo > 0 ? '<button type="button" data-acao="voltar">⬅ Voltar</button>' : ""}
+    </form>`;
+}
+
+function htmlCadastroUnico(r) {
+  return `
+    <h1>Criar conta</h1>
+    <form data-form="cadastro" novalidate>
+      <section class="cartao"><h2>👤 Você</h2>${secaoVoce(r, true)}</section>
+      <section class="cartao"><h2>📍 Onde você compra</h2>${secaoOnde(r)}</section>
+      <section class="cartao"><h2>👨‍👩‍👧 Sua família</h2>${secaoFamilia(r)}</section>
+      <section class="cartao"><h2>🥗 Alimentação</h2>${secaoRestricoes(r)}</section>
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
+      <button class="primario" type="submit">Criar conta e entrar</button>
+    </form>`;
 }
 
 function htmlCadastro() {
   return `
-    <h1>👋 Criar conta</h1>
-    <p>Conte sobre sua família para o app montar a lista de compras.</p>
-    <form data-form="cadastro" class="cartao">
-      <label>Seu nome <input name="nome" required maxlength="40"></label>
-      <label>PIN de 4 a 8 números (opcional)
-        <input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="new-password"></label>
-      ${camposPerfil()}
-      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
-      <button class="primario" type="submit">Criar conta e entrar</button>
-    </form>
-    ${contas.length ? '<button data-tela="entrar">Já tenho conta</button>' : ""}
-    <p class="dica">Seus dados ficam salvos só neste aparelho.</p>`;
+    ${modoCadastro() === "passos" ? htmlCadastroPassos(rascunho) : htmlCadastroUnico(rascunho)}
+    ${contas.length ? '<button type="button" data-tela="entrar">Já tenho conta</button>' : ""}
+    <p class="dica">Seus dados ficam salvos só neste aparelho.</p>
+    ${alternadorModo()}`;
 }
 
 function htmlPerfil() {
+  const r = rascunho;
   return `
     <h1>👤 Perfil</h1>
-    <form data-form="perfil" class="cartao">
-      <label>Seu nome <input name="nome" required maxlength="40" value="${esc(estado.perfil.nome)}"></label>
-      ${camposPerfil(estado.perfil)}
-      <details><summary>Avançado</summary>
+    <form data-form="perfil" novalidate>
+      <section class="cartao"><h2>👤 Você</h2>${secaoVoce(r, false)}</section>
+      <section class="cartao"><h2>📍 Onde você compra</h2>${secaoOnde(r)}</section>
+      <section class="cartao"><h2>👨‍👩‍👧 Sua família</h2>${secaoFamilia(r)}</section>
+      <section class="cartao"><h2>🥗 Alimentação</h2>${secaoRestricoes(r)}</section>
+      <details class="cartao"><summary>Avançado</summary>
         <label>URL do proxy de preços online (opcional)
-          <input name="proxy" type="url" placeholder="https://seu-worker.workers.dev" value="${esc(estado.proxy)}"></label>
+          <input data-r="proxy" type="url" placeholder="https://seu-worker.workers.dev" value="${esc(r.proxy)}"></label>
         <p class="dica">Sem proxy os preços online ficam desligados e você informa o preço da prateleira. Veja o README.</p>
       </details>
+      ${aviso ? `<p class="erro">${esc(aviso)}</p>` : ""}
       <button class="primario" type="submit">Salvar</button>
     </form>
     <p class="dica">Para refazer a lista com a família atualizada, use a aba Compra.</p>
-    <button data-acao="sair">Sair da conta</button>
-    <button class="perigo" data-acao="apagar">Apagar esta conta e seus dados</button>`;
+    <button type="button" data-acao="sair">Sair da conta</button>
+    <button type="button" class="perigo" data-acao="apagar">Apagar esta conta e seus dados</button>`;
 }
 
 function htmlCompra() {
   const { perfil, compra } = estado;
-  const criancas = perfil.criancas.length ? `${perfil.criancas.length} criança(s) (${perfil.criancas.join(", ")} anos)` : "sem crianças";
   const restricoes = perfil.restricoes.map((r) => RESTRICOES[r]).filter(Boolean);
   return `
     <h1>💰 Nova compra</h1>
-    <p>Olá, ${esc(perfil.nome)}! Família: ${perfil.adultos} adulto(s), ${criancas}.
+    <p>Olá, ${esc(perfil.nome)}! 👨‍👩‍👧 Família: ${esc(descreverFamilia(perfil.nome, perfil.membros))}.
       ${restricoes.length ? `Restrições: ${esc(restricoes.join(", "))}.` : ""}</p>
     <form data-form="compra" class="cartao">
       <label>Quanto você quer e pode gastar? (R$) — 0 = sem limite
@@ -676,23 +800,23 @@ function numero(valor, minimo, inteiro) {
 
 const app = document.getElementById("app");
 
-function lerPerfil(fd) {
-  const criancas = String(fd.get("criancas") ?? "")
-    .split(/[,;\s]+/)
-    .filter(Boolean)
-    .map(Number)
-    .filter((n) => Number.isFinite(n) && n >= 0 && n <= 17)
-    .map(Math.round)
-    .slice(0, 12);
-  return {
-    cidade: String(fd.get("cidade")).trim().slice(0, 60),
-    estado: String(fd.get("estado") ?? "").trim().slice(0, 2).toUpperCase(),
-    adultos: numero(fd.get("adultos"), 1, true),
-    criancas,
-    restricoes: fd.getAll("restricoes").filter((r) => r in RESTRICOES),
-    outras: String(fd.get("outras") ?? "").trim().slice(0, 120),
-  };
-}
+app.addEventListener("input", (e) => {
+  const alvo = e.target;
+  if (alvo.dataset.m !== undefined) {
+    const membro = rascunho.membros[Number(alvo.dataset.m)];
+    if (membro) membro[alvo.dataset.mc] = alvo.value;
+    if (alvo.dataset.mc === "idade") alvo.value = alvo.value.slice(0, 2);
+    return;
+  }
+  const campo = alvo.dataset.r;
+  if (!campo) return;
+  if (campo === "restricao") {
+    const sem = rascunho.restricoes.filter((x) => x !== alvo.value);
+    rascunho.restricoes = alvo.checked ? [...sem, alvo.value] : sem;
+  } else {
+    rascunho[campo] = alvo.value;
+  }
+});
 
 app.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -730,36 +854,52 @@ app.addEventListener("submit", async (e) => {
     entrarNaConta(conta.id);
     render();
   } else if (tipo === "cadastro") {
-    const nome = dados.nome.trim().slice(0, 40);
-    const pin = (dados.pin ?? "").trim();
-    if (pin && !/^\d{4,8}$/.test(pin)) {
-      aviso = "O PIN deve ter de 4 a 8 números.";
+    const passos = modoCadastro() === "passos";
+    if (passos && rascunho.passo < PASSOS.length - 1) {
+      aviso = validarRascunho(rascunho, rascunho.passo);
+      if (!aviso) rascunho.passo += 1;
+      render();
+      window.scrollTo(0, 0);
+      return;
+    }
+    const falha = [0, 1, 2].find((p) => validarRascunho(rascunho, p));
+    if (falha !== undefined) {
+      aviso = validarRascunho(rascunho, falha);
+      if (passos) rascunho.passo = falha;
       render();
       return;
     }
+    aviso = "";
+    const perfil = montarPerfil(rascunho);
     const sal = crypto.randomUUID();
-    const conta = { id: `u${Date.now().toString(36)}`, nome, sal, hash: pin ? await hashPin(pin, sal) : null };
+    const conta = { id: `u${Date.now().toString(36)}`, nome: perfil.nome, sal, hash: rascunho.pin ? await hashPin(rascunho.pin, sal) : null };
     contas.push(conta);
     salvarContas();
     sessao = conta.id;
     localStorage.setItem(CHAVE_SESSAO, sessao);
-    estado = { ...PADRAO, perfil: { nome, ...lerPerfil(fd) } };
+    estado = { ...PADRAO, perfil };
     salvar();
+    rascunho = novoRascunho();
     aviso = "";
     info = "";
     tela = "compra";
     render();
     carregarRegiao();
   } else if (tipo === "perfil") {
+    aviso = validarRascunho(rascunho);
+    if (aviso) {
+      render();
+      return;
+    }
     const anterior = estado.perfil;
-    estado.perfil = { nome: dados.nome.trim().slice(0, 40), ...lerPerfil(fd) };
+    estado.perfil = montarPerfil(rascunho);
     const conta = contas.find((c) => c.id === sessao);
     if (conta) {
       conta.nome = estado.perfil.nome;
       salvarContas();
     }
     const proxyAnterior = estado.proxy;
-    estado.proxy = (dados.proxy ?? "").trim();
+    estado.proxy = rascunho.proxy.trim();
     if (estado.proxy !== proxyAnterior) ofertas.clear();
     salvar();
     tela = "lista";
@@ -856,11 +996,36 @@ app.addEventListener("click", (e) => {
   if (botao.dataset.tela) {
     tela = botao.dataset.tela;
     aviso = "";
+    if (tela === "cadastro") rascunho = novoRascunho();
+    if (tela === "perfil") rascunho = novoRascunho(estado.perfil, estado.proxy);
     render();
     window.scrollTo(0, 0);
     return;
   }
   switch (botao.dataset.acao) {
+    case "add-membro":
+      if (rascunho.membros.length < MAX_MEMBROS) rascunho.membros.push(novoMembro(botao.dataset.tipo === "adulto"));
+      render();
+      {
+        const linhas = document.querySelectorAll(".membro-linha:not(.voce)");
+        linhas[linhas.length - 1]?.querySelector("input")?.focus();
+      }
+      return;
+    case "rem-membro":
+      rascunho.membros.splice(Number(botao.dataset.idx), 1);
+      render();
+      return;
+    case "voltar":
+      rascunho.passo = Math.max(0, rascunho.passo - 1);
+      aviso = "";
+      render();
+      window.scrollTo(0, 0);
+      return;
+    case "modo-cadastro":
+      localStorage.setItem(CHAVE_MODO, modoCadastro() === "passos" ? "unica" : "passos");
+      aviso = "";
+      render();
+      return;
     case "remover":
       estado.lista = estado.lista.filter((i) => i.id !== botao.dataset.id);
       abertos.delete(botao.dataset.id);

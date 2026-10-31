@@ -1,6 +1,6 @@
 // Cache do app para funcionar offline dentro do supermercado.
 // Aumente a versão ao publicar mudanças nos arquivos abaixo.
-const VERSAO = "v3";
+const VERSAO = "v4";
 const ARQUIVOS = [
   "./",
   "index.html",
@@ -12,6 +12,7 @@ const ARQUIVOS = [
   "js/app.js",
   "js/orcamento.js",
   "js/gerador.js",
+  "js/familia.js",
   "js/redes.js",
   "js/mapas.js",
 ];
